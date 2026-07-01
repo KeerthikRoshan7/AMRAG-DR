@@ -88,10 +88,10 @@ if uploaded_file:
         c2.metric("Agent-reviewed severity", report["diagnosis"]["severity_grade"])
         c3.metric("Diagnostic confidence", f"{report['diagnosis']['confidence_score']:.0%}")
 
-        st.subheader("📋 Lesion Burden (Agent 1: Lesion Analysis)")
+        st.subheader("📋 Lesion Analysis")
         st.bar_chart(report["lesion_findings"]["lesion_burden"])
 
-        st.subheader("🧠 Diagnostic Reasoning (Agent 3)")
+        st.subheader("🧠 Diagnostic Reasoning")
         st.write(report["diagnosis"]["clinical_justification"])
         st.caption(
             f"Evidence verification: "
@@ -100,12 +100,12 @@ if uploaded_file:
             f"{report['diagnosis']['evidence_verification']['verification_notes']}"
         )
 
-        st.subheader("📚 Retrieved Clinical Evidence (Agent 2)")
+        st.subheader("📚 Retrieved Clinical Evidence")
         for i, ev in enumerate(report["retrieved_evidence"]):
             with st.expander(f"[{i+1}] {ev['source']} (relevance: {ev['score']:.2f})"):
                 st.write(ev["text"])
 
-        st.subheader("🏥 Referral Recommendation (Agent 4)")
+        st.subheader("🏥 Referral Recommendation")
         r = report["referral"]
         st.info(
             f"**Referral required:** {r['referral_required']}  \n"
@@ -114,7 +114,7 @@ if uploaded_file:
             f"**Rationale:** {r['rationale']}"
         )
 
-        st.subheader("💡 Explanation (Agent 5)")
+        st.subheader("💡 Explanation")
         exp = report["explanation"]
         st.write(exp["plain_language_summary"])
         for factor in exp["key_contributing_factors"]:

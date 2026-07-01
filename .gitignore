@@ -11,7 +11,3 @@ __pycache__/
 # Large Model Checkpoints (GitHub blocks files > 100MB)
 checkpoints/*.pt
 checkpoints/*.pth
-
-# FAISS Index (Optional: exclude if larger than 50MB, otherwise you can keep it)
-knowledge_base/index/faiss.index
-knowledge_base/index/chunks.json

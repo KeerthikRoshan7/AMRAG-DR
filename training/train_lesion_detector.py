@@ -37,8 +37,8 @@ from training.dataset import build_train_val_datasets
 # ---------------------------------------------------------------------
 # Config -- edit these for your Kaggle environment
 # ---------------------------------------------------------------------
-CSV_PATH = "/kaggle/input/your-dr-dataset/labels.csv"
-IMAGE_ROOT = "/kaggle/input/your-dr-dataset/images"
+CSV_PATH = "/kaggle/input/datasets/mariaherrerot/aptos2019/train_1.csv"
+IMAGE_ROOT = "/kaggle/input/datasets/mariaherrerot/aptos2019/train_images/train_images"
 CHECKPOINT_DIR = "/kaggle/working/checkpoints"
 BATCH_SIZE = 32
 EPOCHS = 30
