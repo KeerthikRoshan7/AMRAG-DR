@@ -25,17 +25,20 @@ from training.dataset import EVAL_TRANSFORMS
 
 
 class LesionAnalysisAgent:
-    def __init__(self, checkpoint_path: str | None = None, model=None, device: str = "cpu"):
-        self.device = device
-        if model is not None:
-            self.model = model
-        elif checkpoint_path:
-            self.model = self.load_model(checkpoint_path) # Assumes you have a load method
-        else:
-            self.model = self.load_default_weights() # Handle demo mode
-            
-        self.model.to(self.device)
-        self.model.eval()
+        def __init__(self, checkpoint_path: str | None = None, model=None, device = "cpu"):
+                self.device = device
+                if model is not None:
+                        if isinstance(model, dict):
+                                if 'model_state_dict' in model:
+                                        self.model = self.initialize_model_architecture() 
+                                        self.model.load_state_dict(model['model_state_dict'])
+                                else:
+                                        self.model = self.initialize_model_architecture()
+                                        self.model.load_state_dict(model)
+                        else:
+                                self.model = model
+                self.model.to(self.device)
+                self.model.eval()
 
     def analyze(self, image: Image.Image) -> dict:
         """Run lesion detection on a single PIL fundus image."""
