@@ -1,0 +1,25 @@
+# --- Core ML ---
+torch
+torchvision
+timm
+scikit-learn
+numpy
+pandas
+opencv-python-headless
+albumentations
+Pillow
+
+# --- RAG / Knowledge Base ---
+sentence-transformers
+faiss-cpu
+tiktoken
+
+# --- LLM ---
+groq
+
+# --- Serving ---
+fastapi
+uvicorn[standard]
+python-multipart
+streamlit
+python-dotenv
