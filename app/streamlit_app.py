@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from agents.orchestrator import AMRAGOrchestrator
 from utils.gradcam import overlay_gradcam
 from models.lesion_detector import SEVERITY_LABELS
+from huggingface_hub import hf_hub_download
 
 load_dotenv()
 
@@ -21,8 +22,17 @@ DEVICE = os.environ.get("DEVICE", "cpu")
 
 @st.cache_resource(show_spinner="Loading AM-RAG pipeline...")
 def get_orchestrator():
-    checkpoint = CHECKPOINT_PATH if os.path.exists(CHECKPOINT_PATH) else None
-    return AMRAGOrchestrator(checkpoint_path=checkpoint, device=DEVICE)
+    local_checkpoint = "checkpoints/best_model.pt"
+    if not os.path.exists(local_checkpoint):
+        st.write("Downloading model weights from Hugging Face...")
+        model_path = hf_hub_download(
+            repo_id="ROZN/AMRAG-V1", # Ensure this matches your repo name
+            filename="best_model.pt"
+        )
+    else:
+        model_path = local_checkpoint
+        
+    return AMRAGOrchestrator(checkpoint_path=model_path, device=DEVICE)
 
 st.title("🩺 AM-RAG: Agentic Multimodal RAG for Diabetic Retinopathy Screening")
 
