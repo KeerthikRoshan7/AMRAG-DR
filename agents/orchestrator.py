@@ -16,8 +16,9 @@ Returns a single structured report dict consumed by the API / Streamlit app.
 """
 
 import time
+import torch
+import numpy as np
 from PIL import Image
-
 from agents.lesion_analysis_agent import LesionAnalysisAgent
 from agents.evidence_retrieval_agent import EvidenceRetrievalAgent
 from agents.diagnostic_reasoning_agent import DiagnosticReasoningAgent
@@ -35,7 +36,14 @@ class AMRAGOrchestrator:
         self.diagnostic_agent = DiagnosticReasoningAgent(llm_client=llm_client)
         self.referral_agent = ReferralAgent(llm_client=llm_client)
         self.explainability_agent = ExplainabilityAgent(llm_client=llm_client)
-
+      
+    def load_checkpoint(self, checkpoint_path):
+        # Add this allowlist before loading
+        torch.serialization.add_safe_globals([
+            np.core.multiarray.scalar,
+            np.dtype
+        ])
+      
     def run(self, image: Image.Image, patient_metadata: dict | None = None,
             top_k_evidence: int = 5) -> dict:
         timings = {}
@@ -79,4 +87,4 @@ class AMRAGOrchestrator:
             "explanation": explanation,
             "timings": timings,
         }
-        return report, gradcam_map
+        return report, gradcam_map, torch.load(checkpoint_path, weights_only=True)
