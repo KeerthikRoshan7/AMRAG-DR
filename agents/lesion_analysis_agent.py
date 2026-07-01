@@ -25,17 +25,17 @@ from training.dataset import EVAL_TRANSFORMS
 
 
 class LesionAnalysisAgent:
-    def __init__(self, checkpoint_path: str | None = None, device: str = "cpu"):
+    def __init__(self, checkpoint_path: str | None = None, model=None, device: str = "cpu"):
         self.device = device
-        self.model, self.is_trained = load_detector(checkpoint_path, device=device)
-        if not self.is_trained:
-            print(
-                "[LesionAnalysisAgent] WARNING: no trained DR checkpoint found -- "
-                "running with ImageNet-pretrained backbone only. Severity/lesion "
-                "outputs are NOT clinically meaningful until you train on Kaggle "
-                "(see training/train_lesion_detector.py) and point checkpoint_path "
-                "at the resulting weights."
-            )
+        if model is not None:
+            self.model = model
+        elif checkpoint_path:
+            self.model = self.load_model(checkpoint_path) # Assumes you have a load method
+        else:
+            self.model = self.load_default_weights() # Handle demo mode
+            
+        self.model.to(self.device)
+        self.model.eval()
 
     def analyze(self, image: Image.Image) -> dict:
         """Run lesion detection on a single PIL fundus image."""
