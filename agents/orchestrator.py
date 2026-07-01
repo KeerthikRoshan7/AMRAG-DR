@@ -29,20 +29,33 @@ from agents.llm_client import LLMClient
 
 class AMRAGOrchestrator:
     def __init__(self, checkpoint_path: str | None = None, device: str = "cpu"):
-        llm_client = LLMClient()  # shared Groq client across all LLM agents
-
-        self.lesion_agent = LesionAnalysisAgent(checkpoint_path=checkpoint_path, device=device)
+        llm_client = LLMClient()
+        
+        # 1. Load the model ONCE during initialization
+        self.model = None
+        if checkpoint_path:
+            self.model = self.load_checkpoint(checkpoint_path)
+            
+        # 2. Pass the model instance to the agent
+        self.lesion_agent = LesionAnalysisAgent(
+            checkpoint_path=checkpoint_path, 
+            model=self.model, 
+            device=device
+        )
+        
         self.retrieval_agent = EvidenceRetrievalAgent()
         self.diagnostic_agent = DiagnosticReasoningAgent(llm_client=llm_client)
         self.referral_agent = ReferralAgent(llm_client=llm_client)
         self.explainability_agent = ExplainabilityAgent(llm_client=llm_client)
       
     def load_checkpoint(self, checkpoint_path):
-        # Add this allowlist before loading
+        # Allowlist necessary types for your specific checkpoint
         torch.serialization.add_safe_globals([
             np.core.multiarray.scalar,
             np.dtype
         ])
+        # Load and return the model object
+        return torch.load(checkpoint_path, map_location=torch.device('cpu'), weights_only=True)
       
     def run(self, image: Image.Image, patient_metadata: dict | None = None,
             top_k_evidence: int = 5) -> dict:
@@ -87,4 +100,4 @@ class AMRAGOrchestrator:
             "explanation": explanation,
             "timings": timings,
         }
-        return report, gradcam_map, torch.load(checkpoint_path, weights_only=True)
+        return report, gradcam_map
