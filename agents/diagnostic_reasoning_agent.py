@@ -74,7 +74,7 @@ class DiagnosticReasoningAgent:
             for name, val in lesion_findings["lesion_burden"].items()
         )
         evidence_str = "\n\n".join(
-            f"[{i+1}] (source: {e['source']}, relevance: {e['score']:.2f})\n{e['text'][:800]}"
+            f"[{i+1}] (source: {e['source']}, relevance: {e['score']:.2f})\n{e['text']}"
             for i, e in enumerate(evidence)
         ) or "No evidence retrieved."
 

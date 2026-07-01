@@ -43,7 +43,7 @@ class ReferralAgent:
     def recommend(self, diagnostic_result: dict) -> dict:
         evidence = diagnostic_result.get("_retrieved_evidence", [])
         evidence_str = "\n\n".join(
-            f"[{i+1}] (source: {e['source']})\n{e['text'][:600]}"
+            f"[{i+1}] (source: {e['source']})\n{e['text']}"
             for i, e in enumerate(evidence)
         ) or "No evidence retrieved."
 
