@@ -1,6 +1,7 @@
 import os
 import sys
 
+# Ensure project root is in path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
@@ -18,69 +19,60 @@ st.set_page_config(page_title="AM-RAG: Explainable DR Screening", layout="wide")
 CHECKPOINT_PATH = os.environ.get("LESION_CHECKPOINT_PATH", "checkpoints/lesion_detector.pt")
 DEVICE = os.environ.get("DEVICE", "cpu")
 
-
-@st.cache_resource(show_spinner="Loading AM-RAG pipeline (detector + knowledge base)...")
+@st.cache_resource(show_spinner="Loading AM-RAG pipeline...")
 def get_orchestrator():
     checkpoint = CHECKPOINT_PATH if os.path.exists(CHECKPOINT_PATH) else None
     return AMRAGOrchestrator(checkpoint_path=checkpoint, device=DEVICE)
 
-
 st.title("🩺 AM-RAG: Agentic Multimodal RAG for Diabetic Retinopathy Screening")
-st.caption(
-    "Lesion detection -> clinical knowledge retrieval -> agentic reasoning -> "
-    "explainable, evidence-grounded diagnostic report."
-)
 
+# Sidebar for metadata
 with st.sidebar:
-    st.header("Patient Metadata (optional)")
+    st.header("Patient Metadata")
     age = st.number_input("Age", min_value=0, max_value=120, value=0)
     dtype = st.selectbox("Diabetes type", ["Not specified", "Type 1", "Type 2", "Gestational"])
     duration = st.number_input("Diabetes duration (years)", min_value=0, max_value=80, value=0)
     hba1c = st.number_input("HbA1c (%)", min_value=0.0, max_value=20.0, value=0.0, step=0.1)
-    st.markdown("---")
-    st.caption(
-        "⚠️ This is a research / thesis demo of the AM-RAG architecture. "
-        "It is not a certified diagnostic device and must not be used for "
-        "real clinical decisions."
-    )
 
-uploaded_file = st.file_uploader("Upload a fundus (retinal) image", type=["png", "jpg", "jpeg"])
+uploaded_file = st.file_uploader("Upload a fundus image", type=["png", "jpg", "jpeg"])
+
+# Use session state to persist results across reruns
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = None
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.image(image, caption="Uploaded fundus image", width=True)
+    
+    # Create columns for initial display
+    c1, c2 = st.columns(2)
+    with c1:
+        st.image(image, caption="Uploaded fundus image", use_container_width=True)
 
     if st.button("Run AM-RAG Analysis", type="primary"):
-        metadata = {}
-        if age > 0:
-            metadata["age"] = age
-        if dtype != "Not specified":
-            metadata["diabetes_type"] = dtype
-        if duration > 0:
-            metadata["diabetes_duration_years"] = duration
-        if hba1c > 0:
-            metadata["hba1c"] = hba1c
+        metadata = {k: v for k, v in {
+            "age": age if age > 0 else None,
+            "diabetes_type": dtype if dtype != "Not specified" else None,
+            "diabetes_duration_years": duration if duration > 0 else None,
+            "hba1c": hba1c if hba1c > 0 else None
+        }.items() if v is not None}
 
         orchestrator = get_orchestrator()
+        with st.spinner("Agentic reasoning in progress..."):
+            st.session_state.analysis_results = orchestrator.run(image, patient_metadata=metadata or None)
 
-        with st.spinner("Running lesion detection, retrieval, and multi-agent reasoning..."):
-            report, gradcam_map = orchestrator.run(image, patient_metadata=metadata or None)
-
-        if report["model_checkpoint_status"] == "UNTRAINED_DEMO_MODE":
-            st.warning(
-                "⚠️ Running with an UNTRAINED lesion detector (ImageNet weights only). "
-                "Severity/lesion outputs below are placeholders to demonstrate the "
-                "pipeline -- train on Kaggle (training/train_lesion_detector.py) and "
-                "set LESION_CHECKPOINT_PATH for real predictions."
-            )
-
-        with col2:
+    # Rendering section: Display results if they exist in session state
+    if st.session_state.analysis_results:
+        report, gradcam_map = st.session_state.analysis_results
+        
+        with c2:
+            st.subheader("Grad-CAM Analysis")
             if gradcam_map is not None:
                 overlay = overlay_gradcam(image, gradcam_map)
-                st.image(overlay, caption="Grad-CAM attention overlay", width=True)
+                st.image(overlay, caption="Grad-CAM attention overlay", use_container_width=True)
+            else:
+                st.warning("Grad-CAM map could not be generated.")
 
+        # Metrics and Results
         st.markdown("---")
 
         c1, c2, c3 = st.columns(3)
