@@ -70,7 +70,7 @@ class DRLesionDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img_path = os.path.join(self.image_root, row["image_path"])
+        img_path = os.path.join(self.image_root, row["id_code"] + ".png")
         image = cv2.imread(img_path)
         if image is None:
             raise FileNotFoundError(f"Could not read image: {img_path}")
