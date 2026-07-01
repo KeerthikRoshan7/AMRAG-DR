@@ -68,7 +68,7 @@ def train():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
-    scaler = torch.cuda.amp.GradScaler(enabled=(DEVICE == "cuda"))
+    scaler = torch.amp.GradScaler('cuda', enabled=(DEVICE == "cuda"))
 
     best_val_qwk = -1.0
     epochs_no_improve = 0
