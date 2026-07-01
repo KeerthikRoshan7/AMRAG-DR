@@ -49,13 +49,12 @@ class AMRAGOrchestrator:
         self.explainability_agent = ExplainabilityAgent(llm_client=llm_client)
       
     def load_checkpoint(self, checkpoint_path):
-        # Allowlist necessary types for your specific checkpoint
-        torch.serialization.add_safe_globals([
-            np.core.multiarray.scalar,
-            np.dtype
-        ])
-        # Load and return the model object
-        return torch.load(checkpoint_path, map_location=torch.device('cpu'), weights_only=True)
+      torch.serialization.add_safe_globals([
+        np.core.multiarray.scalar,
+        np.dtype,
+        np.dtypes.Float64DType
+      ])
+      return torch.load(checkpoint_path, map_location="cpu", weights_only=True)
       
     def run(self, image: Image.Image, patient_metadata: dict | None = None,
             top_k_evidence: int = 5) -> dict:
