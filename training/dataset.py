@@ -70,7 +70,9 @@ class DRLesionDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img_path = os.path.join(self.image_root, row["image_path"])
+        
+        # 1. Map columns correctly: id_code is the filename, diagnosis is the label
+        img_path = os.path.join(self.image_root, str(row["id_code"]) + ".png")
         image = cv2.imread(img_path)
         if image is None:
             raise FileNotFoundError(f"Could not read image: {img_path}")
@@ -79,13 +81,12 @@ class DRLesionDataset(Dataset):
         augmented = self.transform(image=image)
         image = augmented["image"]
 
-        severity = int(row["severity_label"])
+        # 2. Map 'diagnosis' to the internal severity variable
+        severity = int(row["diagnosis"])
 
         if self.has_lesion_labels:
             lesion = row[LESION_COLUMNS].values.astype(np.float32)
         else:
-            # weak proxy target: monotonically increasing with severity,
-            # refined later by Grad-CAM-derived pseudo-labels in train loop
             lesion = weak_lesion_pseudo_labels(severity)
 
         return {
