@@ -7,6 +7,7 @@ from PIL import Image
 from dotenv import load_dotenv
 import streamlit as st
 from huggingface_hub import hf_hub_download
+from sklearn.metrics import accuracy_score, roc_auc_score
 
 # Ensure project root is in path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -41,13 +42,76 @@ def get_orchestrator():
 # --- App Layout ---
 st.title("🩺 AM-RAG: Agentic Multimodal RAG for Diabetic Retinopathy Screening")
 
-# Sidebar for metadata
+# Sidebar for metadata and background evaluation
 with st.sidebar:
     st.header("Patient Metadata")
     age = st.number_input("Age", min_value=0, max_value=120, value=0)
     dtype = st.selectbox("Diabetes type", ["Not specified", "Type 1", "Type 2", "Gestational"])
     duration = st.number_input("Diabetes duration (years)", min_value=0, max_value=80, value=0)
     hba1c = st.number_input("HbA1c (%)", min_value=0.0, max_value=20.0, value=0.0, step=0.1)
+
+    st.markdown("---")
+    st.header("Admin Tools")
+    st.write("Run a background evaluation of the validation set and print metrics to logs.")
+    val_csv_path = st.text_input("Validation CSV Path", value="data/val.csv")
+    val_img_root = st.text_input("Validation Image Root", value="data/images")
+    
+    if st.button("Log System Performance Metrics"):
+        if os.path.exists(val_csv_path) and os.path.exists(val_img_root):
+            with st.spinner("Running background evaluation..."):
+                try:
+                    df = pd.read_csv(val_csv_path).head(50) # Limit to 50 for log speed
+                    orchestrator = get_orchestrator()
+                    results = []
+                    
+                    for _, row in df.iterrows():
+                        img_path = os.path.join(val_img_root, str(row["id_code"]) + ".png")
+                        if not os.path.exists(img_path):
+                            img_path = os.path.join(val_img_root, str(row["id_code"]) + ".jpg")
+                        
+                        if os.path.exists(img_path):
+                            image = Image.open(img_path).convert("RGB")
+                            report, _, _ = orchestrator.run(image)
+                            results.append({
+                                "target": int(row["diagnosis"]),
+                                "vision_pred": report["lesion_findings"]["severity_grade"],
+                                "vision_probs": [report["lesion_findings"]["severity_probs"][l] for l in SEVERITY_LABELS],
+                                "reasoning_pred": SEVERITY_LABELS.index(report["diagnosis"]["severity_grade"]) if report["diagnosis"]["severity_grade"] in SEVERITY_LABELS else -1
+                            })
+                    
+                    if results:
+                        res_df = pd.DataFrame(results)
+                        targets = res_df["target"].values
+                        vision_preds = res_df["vision_pred"].values
+                        vision_probs = np.array(res_df["vision_probs"].tolist())
+                        reasoning_preds = res_df["reasoning_pred"].values
+
+                        vis_acc = accuracy_score(targets, vision_preds)
+                        try:
+                            vis_auroc = roc_auc_score(targets, vision_probs, multi_class='ovr', average='macro')
+                        except:
+                            vis_auroc = 0.0
+                        
+                        valid_reasoning = reasoning_preds != -1
+                        reas_acc = accuracy_score(targets[valid_reasoning], reasoning_preds[valid_reasoning]) if valid_reasoning.any() else 0.0
+
+                        # --- PRINT TO LOGS ---
+                        print("\n" + "="*45)
+                        print(f" AGGREGATE PERFORMANCE REPORT - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                        print("="*45)
+                        print(f"Total Samples:      {len(results)}")
+                        print(f"Vision Accuracy:    {vis_acc:.4f}")
+                        print(f"Vision AUROC:       {vis_auroc:.4f}")
+                        print(f"Reasoning Accuracy: {reas_acc:.4f}")
+                        print("="*45 + "\n")
+                        
+                        st.success("Performance report printed to system logs.")
+                    else:
+                        st.error("No valid images found in the specified path.")
+                except Exception as e:
+                    st.error(f"Evaluation failed: {e}")
+        else:
+            st.error("Validation paths not found. Please check your data directory.")
 
 uploaded_file = st.file_uploader("Upload a fundus image", type=["png", "jpg", "jpeg"])
 
@@ -61,6 +125,7 @@ if uploaded_file:
     # Create columns for initial display
     c1, c2 = st.columns(2)
     with c1:
+        # width='stretch' instead of use_container_width=True
         st.image(image, caption="Uploaded fundus image", width='stretch')
 
     if st.button("Run AM-RAG Analysis", type="primary"):
@@ -75,18 +140,13 @@ if uploaded_file:
         with st.spinner("Agentic reasoning in progress..."):
             st.session_state.analysis_results = orchestrator.run(image, patient_metadata=metadata or None)
             
-            # --- LOGGING FOR STREAMLIT CLOUD ---
+            # --- INDIVIDUAL ANALYSIS LOGGING ---
             report, _, _ = st.session_state.analysis_results
-            print("\n" + "="*40)
-            print(f" ANALYSIS LOG - {time.strftime('%Y-%m-%d %H:%M:%S')}")
-            print("="*40)
-            print(f"Model Predicted: {report['lesion_findings']['severity_label']}")
-            print(f"Model Confidence: {report['lesion_findings']['severity_confidence']:.4f}")
-            print(f"Agent Reviewed:  {report['diagnosis']['severity_grade']}")
-            print(f"Agent Confidence: {report['diagnosis']['confidence_score']:.4f}")
-            print(f"Referral Req:    {report['referral']['referral_required']}")
-            print(f"Total Time:      {sum(report['timings'].values()):.2f}s")
-            print("="*40 + "\n")
+            print("\n" + "-"*40)
+            print(f" INDIVIDUAL RUN LOG - {time.strftime('%H:%M:%S')}")
+            print(f" Predicted: {report['lesion_findings']['severity_label']} | Confidence: {report['lesion_findings']['severity_confidence']:.4f}")
+            print(f" Reviewed:  {report['diagnosis']['severity_grade']} | Confidence: {report['diagnosis']['confidence_score']:.4f}")
+            print("-"*40 + "\n")
 
     # Rendering section: Display results if they exist in session state
     if st.session_state.analysis_results:
@@ -107,6 +167,7 @@ if uploaded_file:
 
             if cam_to_show is not None:
                 overlay = overlay_gradcam(image, cam_to_show)
+                # width='stretch' instead of use_container_width=True
                 st.image(overlay, caption=f"Grad-CAM++ attention overlay ({selected_view})", width='stretch')
             else:
                 st.warning("Grad-CAM map could not be generated.")
@@ -162,4 +223,5 @@ if uploaded_file:
         with st.expander("⏱ Agent timing breakdown"):
             st.json(report["timings"])
 else:
+    # width='content' instead of use_container_width=False
     st.info("Upload a fundus image to run the full AM-RAG pipeline.")
