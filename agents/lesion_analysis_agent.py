@@ -89,6 +89,9 @@ class LesionAnalysisAgent:
         if activations is None:
             return None
 
+        print(f"[GradCAM debug] activations min={activations.min().item():.4f}, "
+              f"max={activations.max().item():.4f}")   # <-- temporary, remove after checking
+
         grads = torch.autograd.grad(
             target_logit, activations, retain_graph=True, create_graph=False,
             allow_unused=True,
