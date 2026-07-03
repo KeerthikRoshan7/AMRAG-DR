@@ -1,5 +1,5 @@
 """
-Agent 3: Diagnostic Reasoning Agent (AM-RAG Section 5.3.3)
+Agent 3: Diagnostic Reasoning Agent
 
 The central intelligence component. Implements the five-stage multimodal
 reasoning workflow:
