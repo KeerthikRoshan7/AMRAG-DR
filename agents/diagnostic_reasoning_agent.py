@@ -73,9 +73,17 @@ class DiagnosticReasoningAgent:
             f"  - {name.replace('_', ' ')}: {val:.2f}"
             for name, val in lesion_findings["lesion_burden"].items()
         )
+        def _fmt_evidence(i: int, e: dict) -> str:
+          # EvidenceChunk.to_dict() emits 'source_url'/'title'/'relevance_score',
+          # not 'source'/'score' -- accept either naming so a future schema
+          # change on the retrieval side can't silently crash reasoning again.
+          source = e.get("source") or e.get("title") or e.get("source_url", "unknown source")
+          score = e.get("score", e.get("relevance_score", 0.0))
+          text = e.get("text", "")
+          return f"[{i+1}] (source: {source}, relevance: {score:.2f})\n{text}"
+
         evidence_str = "\n\n".join(
-            f"[{i+1}] (source: {e['source']}, relevance: {e['score']:.2f})\n{e['text']}"
-            for i, e in enumerate(evidence)
+          _fmt_evidence(i, e) for i, e in enumerate(evidence)
         ) or "No evidence retrieved."
 
         metadata_str = "\n".join(f"  - {k}: {v}" for k, v in (patient_metadata or {}).items()) \
