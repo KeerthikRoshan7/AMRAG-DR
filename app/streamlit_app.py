@@ -1,6 +1,9 @@
 import os
 import sys
 import time
+import json
+import zipfile
+import tempfile
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -23,6 +26,11 @@ st.set_page_config(page_title="AM-RAG: Explainable DR Screening", layout="wide")
 CHECKPOINT_PATH = os.environ.get("LESION_CHECKPOINT_PATH", "checkpoints/lesion_detector.pt")
 DEVICE = os.environ.get("DEVICE", "cpu")
 
+# --- APTOS 2019 Defaults ---
+DEFAULT_KAGLLE_DATASET = "mariaherrerot/aptos2019"
+DEFAULT_CSV = "train_1.csv"
+DEFAULT_IMG_DIR = "train_images/train_images"
+
 @st.cache_resource(show_spinner="Loading AM-RAG pipeline...")
 def get_orchestrator():
     local_checkpoint = "checkpoints/best_model.pt"
@@ -42,7 +50,7 @@ def get_orchestrator():
 # --- App Layout ---
 st.title("🩺 AM-RAG: Agentic Multimodal RAG for Diabetic Retinopathy Screening")
 
-# Sidebar for metadata and background evaluation
+# Sidebar for metadata and Kaggle-based evaluation
 with st.sidebar:
     st.header("Patient Metadata")
     age = st.number_input("Age", min_value=0, max_value=120, value=0)
@@ -51,67 +59,88 @@ with st.sidebar:
     hba1c = st.number_input("HbA1c (%)", min_value=0.0, max_value=20.0, value=0.0, step=0.1)
 
     st.markdown("---")
-    st.header("Admin Tools")
-    st.write("Run a background evaluation of the validation set and print metrics to logs.")
-    val_csv_path = st.text_input("Validation CSV Path", value="data/val.csv")
-    val_img_root = st.text_input("Validation Image Root", value="data/images")
+    st.header("Admin: Benchmark Evaluation")
+    st.write("Run a background evaluation using the APTOS 2019 dataset from Kaggle.")
     
-    if st.button("Log System Performance Metrics"):
-        if os.path.exists(val_csv_path) and os.path.exists(val_img_root):
-            with st.spinner("Running background evaluation..."):
+    k_user = st.text_input("Kaggle Username", type="password")
+    k_key = st.text_input("Kaggle API Key", type="password")
+    
+    if st.button("Run APTOS 2019 Benchmark & Log Metrics"):
+        if k_user and k_key:
+            with st.spinner("Pipelining APTOS 2019 data from Kaggle..."):
                 try:
-                    df = pd.read_csv(val_csv_path).head(50) # Limit to 50 for log speed
-                    orchestrator = get_orchestrator()
-                    results = []
+                    os.environ['KAGGLE_USERNAME'] = k_user
+                    os.environ['KAGGLE_KEY'] = k_key
                     
-                    for _, row in df.iterrows():
-                        img_path = os.path.join(val_img_root, str(row["id_code"]) + ".png")
-                        if not os.path.exists(img_path):
-                            img_path = os.path.join(val_img_root, str(row["id_code"]) + ".jpg")
-                        
-                        if os.path.exists(img_path):
-                            image = Image.open(img_path).convert("RGB")
-                            report, _, _ = orchestrator.run(image)
-                            results.append({
-                                "target": int(row["diagnosis"]),
-                                "vision_pred": report["lesion_findings"]["severity_grade"],
-                                "vision_probs": [report["lesion_findings"]["severity_probs"][l] for l in SEVERITY_LABELS],
-                                "reasoning_pred": SEVERITY_LABELS.index(report["diagnosis"]["severity_grade"]) if report["diagnosis"]["severity_grade"] in SEVERITY_LABELS else -1
-                            })
+                    from kaggle.api.kaggle_api_extended import KaggleApi
+                    api = KaggleApi()
+                    api.authenticate()
                     
-                    if results:
-                        res_df = pd.DataFrame(results)
-                        targets = res_df["target"].values
-                        vision_preds = res_df["vision_pred"].values
-                        vision_probs = np.array(res_df["vision_probs"].tolist())
-                        reasoning_preds = res_df["reasoning_pred"].values
-
-                        vis_acc = accuracy_score(targets, vision_preds)
-                        try:
-                            vis_auroc = roc_auc_score(targets, vision_probs, multi_class='ovr', average='macro')
-                        except:
-                            vis_auroc = 0.0
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        # Download APTOS 2019
+                        api.dataset_download_files(DEFAULT_KAGLLE_DATASET, path=tmpdir, unzip=True)
                         
-                        valid_reasoning = reasoning_preds != -1
-                        reas_acc = accuracy_score(targets[valid_reasoning], reasoning_preds[valid_reasoning]) if valid_reasoning.any() else 0.0
-
-                        # --- PRINT TO LOGS ---
-                        print("\n" + "="*45)
-                        print(f" AGGREGATE PERFORMANCE REPORT - {time.strftime('%Y-%m-%d %H:%M:%S')}")
-                        print("="*45)
-                        print(f"Total Samples:      {len(results)}")
-                        print(f"Vision Accuracy:    {vis_acc:.4f}")
-                        print(f"Vision AUROC:       {vis_auroc:.4f}")
-                        print(f"Reasoning Accuracy: {reas_acc:.4f}")
-                        print("="*45 + "\n")
+                        csv_path = os.path.join(tmpdir, DEFAULT_CSV)
+                        img_root = os.path.join(tmpdir, DEFAULT_IMG_DIR)
                         
-                        st.success("Performance report printed to system logs.")
-                    else:
-                        st.error("No valid images found in the specified path.")
+                        if os.path.exists(csv_path):
+                            df = pd.read_csv(csv_path).head(50) # Benchmark sample size
+                            orchestrator = get_orchestrator()
+                            results = []
+                            
+                            for _, row in df.iterrows():
+                                # Check for .png or .jpg
+                                img_id = str(row["id_code"])
+                                img_path = os.path.join(img_root, img_id + ".png")
+                                if not os.path.exists(img_path):
+                                    img_path = os.path.join(img_root, img_id + ".jpg")
+                                
+                                if os.path.exists(img_path):
+                                    image = Image.open(img_path).convert("RGB")
+                                    report, _, _ = orchestrator.run(image)
+                                    results.append({
+                                        "target": int(row["diagnosis"]),
+                                        "vision_pred": report["lesion_findings"]["severity_grade"],
+                                        "vision_probs": [report["lesion_findings"]["severity_probs"][l] for l in SEVERITY_LABELS],
+                                        "reasoning_pred": SEVERITY_LABELS.index(report["diagnosis"]["severity_grade"]) if report["diagnosis"]["severity_grade"] in SEVERITY_LABELS else -1
+                                    })
+                            
+                            if results:
+                                res_df = pd.DataFrame(results)
+                                targets = res_df["target"].values
+                                vision_preds = res_df["vision_pred"].values
+                                vision_probs = np.array(res_df["vision_probs"].tolist())
+                                reasoning_preds = res_df["reasoning_pred"].values
+
+                                vis_acc = accuracy_score(targets, vision_preds)
+                                try:
+                                    vis_auroc = roc_auc_score(targets, vision_probs, multi_class='ovr', average='macro')
+                                except:
+                                    vis_auroc = 0.0
+                                
+                                valid_reasoning = reasoning_preds != -1
+                                reas_acc = accuracy_score(targets[valid_reasoning], reasoning_preds[valid_reasoning]) if valid_reasoning.any() else 0.0
+
+                                # --- PRINT TO LOGS ---
+                                print("\n" + "="*45)
+                                print(f" APTOS 2019 BENCHMARK REPORT - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                                print(f" Dataset: {DEFAULT_KAGLLE_DATASET}")
+                                print("="*45)
+                                print(f"Total Samples:      {len(results)}")
+                                print(f"Vision Accuracy:    {vis_acc:.4f}")
+                                print(f"Vision AUROC:       {vis_auroc:.4f}")
+                                print(f"Reasoning Accuracy: {reas_acc:.4f}")
+                                print("="*45 + "\n")
+                                
+                                st.success("Benchmark complete. Metrics printed to system logs.")
+                            else:
+                                st.error("No valid images found in the dataset.")
+                        else:
+                            st.error(f"CSV file '{DEFAULT_CSV}' not found in dataset.")
                 except Exception as e:
-                    st.error(f"Evaluation failed: {e}")
+                    st.error(f"Kaggle benchmark failed: {e}")
         else:
-            st.error("Validation paths not found. Please check your data directory.")
+            st.error("Please provide Kaggle Username and API Key.")
 
 uploaded_file = st.file_uploader("Upload a fundus image", type=["png", "jpg", "jpeg"])
 
@@ -125,7 +154,7 @@ if uploaded_file:
     # Create columns for initial display
     c1, c2 = st.columns(2)
     with c1:
-        # width='stretch' instead of use_container_width=True
+        # width='stretch'
         st.image(image, caption="Uploaded fundus image", width='stretch')
 
     if st.button("Run AM-RAG Analysis", type="primary"):
@@ -167,7 +196,7 @@ if uploaded_file:
 
             if cam_to_show is not None:
                 overlay = overlay_gradcam(image, cam_to_show)
-                # width='stretch' instead of use_container_width=True
+                # width='stretch'
                 st.image(overlay, caption=f"Grad-CAM++ attention overlay ({selected_view})", width='stretch')
             else:
                 st.warning("Grad-CAM map could not be generated.")
@@ -223,5 +252,5 @@ if uploaded_file:
         with st.expander("⏱ Agent timing breakdown"):
             st.json(report["timings"])
 else:
-    # width='content' instead of use_container_width=False
-    st.info("Upload a fundus image to run the full AM-RAG pipeline.")
+    # width='content'
+    st.info("Upload a fundus image to run the full AM-RAG pipeline.", width='content')
