@@ -83,12 +83,54 @@ class CNNViTHybridLesionDetector(nn.Module):
 
         # Cache last CNN conv feature map for Grad-CAM (Explainability Agent)
         self._last_conv_features = None
-        self._register_gradcam_hook()
+        self._register_gradcam_hook(target_grid=14)
 
-    def _register_gradcam_hook(self):
-        """Hook the last conv block of the CNN branch to capture activations
-        for Grad-CAM, used later by the Explainability Agent."""
-        target_layer = self._find_last_conv_layer(self.cnn)
+    def _register_gradcam_hook(self, target_grid: int = 14, dummy_input_size: int = 224):
+        """Hook a CNN conv layer for Grad-CAM.
+
+        The naive "literal last Conv2d" (previously used) resolves to
+        EfficientNet-B3's conv_head, whose output grid is only ~7x7 for a
+        224px input -- upsampled 32x to the display size, which is why
+        small lesions (microaneurysms, small hemorrhages) show up as one
+        diffuse blob rather than distinct regions.
+
+        Instead, run a dummy forward pass, record every Conv2d layer's
+        output spatial resolution, and pick the layer whose grid size is
+        closest to `target_grid` (default 14x14 -- one stage earlier than
+        the head, still deep enough to be semantically meaningful, but
+        4x the spatial resolution of the final 7x7 grid). This is robust
+        to backbone changes since it doesn't hardcode a module path.
+        """
+        candidates = []
+
+        def make_probe(name, mod):
+            def probe(module, inp, out):
+                if out.dim() == 4:
+                    candidates.append((name, mod, out.shape[-1]))
+            return probe
+
+        probe_handles = []
+        for name, m in self.cnn.named_modules():
+            if isinstance(m, nn.Conv2d):
+                probe_handles.append(m.register_forward_hook(make_probe(name, m)))
+
+        was_training = self.cnn.training
+        self.cnn.eval()
+        with torch.no_grad():
+            dummy = torch.zeros(1, 3, dummy_input_size, dummy_input_size)
+            self.cnn(dummy)
+        self.cnn.train(was_training)
+
+        for h in probe_handles:
+            h.remove()
+
+        target_layer = None
+        if candidates:
+            target_layer = min(candidates, key=lambda c: abs(c[2] - target_grid))[1]
+        else:
+            for m in self.cnn.modules():
+                if isinstance(m, nn.Conv2d):
+                    target_layer = m
 
         def hook(module, inp, out):
             self._last_conv_features = out
@@ -98,14 +140,6 @@ class CNNViTHybridLesionDetector(nn.Module):
             self._gradcam_layer = target_layer
         else:
             self._gradcam_layer = None
-
-    @staticmethod
-    def _find_last_conv_layer(module: nn.Module):
-        last_conv = None
-        for m in module.modules():
-            if isinstance(m, nn.Conv2d):
-                last_conv = m
-        return last_conv
 
     def forward(self, x: torch.Tensor):
         """
