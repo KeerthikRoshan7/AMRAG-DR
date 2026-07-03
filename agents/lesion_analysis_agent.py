@@ -104,8 +104,10 @@ class LesionAnalysisAgent:
         cam = F.interpolate(cam, size=(224, 224), mode="bilinear", align_corners=False)
         cam = cam[0, 0].detach().cpu().numpy()
 
+        # Improved normalization: use percentile to handle outliers
         if cam.max() > 0:
-            cam = cam / cam.max()
+            v_min, v_max = np.percentile(cam, [2, 98])
+            cam = np.clip((cam - v_min) / (v_max - v_min + 1e-8), 0, 1)
         return cam
 
     def _compute_lesion_gradcams(self, lesion_burden_vec: torch.Tensor) -> dict:
@@ -127,7 +129,8 @@ class LesionAnalysisAgent:
             cam = F.interpolate(cam, size=(224, 224), mode="bilinear", align_corners=False)
             cam = cam[0, 0].detach().cpu().numpy()
             if cam.max() > 0:
-                cam = cam / cam.max()
+                v_min, v_max = np.percentile(cam, [2, 98])
+                cam = np.clip((cam - v_min) / (v_max - v_min + 1e-8), 0, 1)
             maps[name] = cam
         return maps
 
