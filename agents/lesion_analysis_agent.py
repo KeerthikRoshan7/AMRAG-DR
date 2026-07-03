@@ -5,7 +5,7 @@ from PIL import Image
 
 from models.lesion_detector import (
     CNNViTHybridLesionDetector, LesionDetectorConfig,
-    LESION_NAMES, SEVERITY_LABELS, load_detector,
+    LESION_NAMES, SEVERITY_LABELS, load_detector, load_state_dict_compat,
 )
 from training.dataset import EVAL_TRANSFORMS
 
@@ -19,7 +19,7 @@ class LesionAnalysisAgent:
                 # Handle state_dict unpacking
                 self.model = self.initialize_model_architecture()
                 state_dict = model.get('model_state_dict', model)
-                self.model.load_state_dict(state_dict)
+                load_state_dict_compat(self.model, state_dict)
             else:
                 self.model = model
         else:
