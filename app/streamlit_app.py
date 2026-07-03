@@ -1,17 +1,19 @@
 import os
 import sys
+import time
+import numpy as np
+import pandas as pd
+from PIL import Image
+from dotenv import load_dotenv
+import streamlit as st
+from huggingface_hub import hf_hub_download
 
 # Ensure project root is in path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import streamlit as st
-from PIL import Image
-from dotenv import load_dotenv
-
 from agents.orchestrator import AMRAGOrchestrator
 from utils.gradcam import overlay_gradcam
 from models.lesion_detector import SEVERITY_LABELS
-from huggingface_hub import hf_hub_download
 
 load_dotenv()
 
@@ -24,16 +26,19 @@ DEVICE = os.environ.get("DEVICE", "cpu")
 def get_orchestrator():
     local_checkpoint = "checkpoints/best_model.pt"
     if not os.path.exists(local_checkpoint):
-        st.write("Downloading model weights from Hugging Face...")
-        model_path = hf_hub_download(
-            repo_id="ROZN/AMRAG-V1", # Ensure this matches your repo name
-            filename="best_model.pt"
-        )
+        try:
+            model_path = hf_hub_download(
+                repo_id="ROZN/AMRAG-V1", 
+                filename="best_model.pt"
+            )
+        except Exception:
+            model_path = None
     else:
         model_path = local_checkpoint
         
     return AMRAGOrchestrator(checkpoint_path=model_path, device=DEVICE)
 
+# --- App Layout ---
 st.title("🩺 AM-RAG: Agentic Multimodal RAG for Diabetic Retinopathy Screening")
 
 # Sidebar for metadata
@@ -56,7 +61,7 @@ if uploaded_file:
     # Create columns for initial display
     c1, c2 = st.columns(2)
     with c1:
-        st.image(image, caption="Uploaded fundus image", width='stretch')
+        st.image(image, caption="Uploaded fundus image", use_container_width=True)
 
     if st.button("Run AM-RAG Analysis", type="primary"):
         metadata = {k: v for k, v in {
@@ -69,6 +74,19 @@ if uploaded_file:
         orchestrator = get_orchestrator()
         with st.spinner("Agentic reasoning in progress..."):
             st.session_state.analysis_results = orchestrator.run(image, patient_metadata=metadata or None)
+            
+            # --- LOGGING FOR STREAMLIT CLOUD ---
+            report, _, _ = st.session_state.analysis_results
+            print("\n" + "="*40)
+            print(f" ANALYSIS LOG - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            print("="*40)
+            print(f"Model Predicted: {report['lesion_findings']['severity_label']}")
+            print(f"Model Confidence: {report['lesion_findings']['severity_confidence']:.4f}")
+            print(f"Agent Reviewed:  {report['diagnosis']['severity_grade']}")
+            print(f"Agent Confidence: {report['diagnosis']['confidence_score']:.4f}")
+            print(f"Referral Req:    {report['referral']['referral_required']}")
+            print(f"Total Time:      {sum(report['timings'].values()):.2f}s")
+            print("="*40 + "\n")
 
     # Rendering section: Display results if they exist in session state
     if st.session_state.analysis_results:
@@ -89,17 +107,17 @@ if uploaded_file:
 
             if cam_to_show is not None:
                 overlay = overlay_gradcam(image, cam_to_show)
-                st.image(overlay, caption=f"Grad-CAM++ attention overlay ({selected_view})", width='stretch')
+                st.image(overlay, caption=f"Grad-CAM++ attention overlay ({selected_view})", use_container_width=True)
             else:
                 st.warning("Grad-CAM map could not be generated.")
 
         # Metrics and Results
         st.markdown("---")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Model-predicted severity", report["lesion_findings"]["severity_label"])
-        c2.metric("Agent-reviewed severity", report["diagnosis"]["severity_grade"])
-        c3.metric("Diagnostic confidence", f"{report['diagnosis']['confidence_score']:.0%}")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Model-predicted severity", report["lesion_findings"]["severity_label"])
+        col2.metric("Agent-reviewed severity", report["diagnosis"]["severity_grade"])
+        col3.metric("Diagnostic confidence", f"{report['diagnosis']['confidence_score']:.0%}")
 
         st.subheader("📋 Lesion Analysis")
         st.bar_chart(report["lesion_findings"]["lesion_burden"])
@@ -109,8 +127,7 @@ if uploaded_file:
         st.caption(
             f"Evidence verification: "
             f"{report['diagnosis']['evidence_verification']['claims_supported_by_evidence']}/"
-            f"{report['diagnosis']['evidence_verification']['claims_checked']} claims grounded in retrieved evidence. "
-            f"{report['diagnosis']['evidence_verification']['verification_notes']}"
+            f"{report['diagnosis']['evidence_verification']['claims_checked']} claims grounded."
         )
 
         st.subheader("📚 Retrieved Clinical Evidence")
