@@ -79,7 +79,7 @@ async def analyze(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="patient_metadata must be valid JSON")
 
-    report, gradcam_map = orchestrator.run(pil_image, patient_metadata=metadata)
+    report, gradcam_map, lesion_gradcam_maps = orchestrator.run(pil_image, patient_metadata=metadata)
 
     gradcam_b64 = None
     if gradcam_map is not None:
@@ -88,5 +88,13 @@ async def analyze(
         overlay_img.save(buf, format="PNG")
         gradcam_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
+    lesion_gradcam_b64 = {}
+    for name, cam in (lesion_gradcam_maps or {}).items():
+        overlay_img = overlay_gradcam(pil_image, cam)
+        buf = io.BytesIO()
+        overlay_img.save(buf, format="PNG")
+        lesion_gradcam_b64[name] = base64.b64encode(buf.getvalue()).decode("utf-8")
+
     report["gradcam_overlay_png_base64"] = gradcam_b64
+    report["lesion_gradcam_overlays_png_base64"] = lesion_gradcam_b64
     return report
