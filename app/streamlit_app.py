@@ -252,5 +252,4 @@ if uploaded_file:
         with st.expander("⏱ Agent timing breakdown"):
             st.json(report["timings"])
 else:
-    # width='content'
-    st.info("Upload a fundus image to run the full AM-RAG pipeline.", width='content')
+    st.info("Upload a fundus image to run the full AM-RAG pipeline.")
