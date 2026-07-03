@@ -65,7 +65,7 @@ class AMRAGOrchestrator:
         timings["lesion_analysis_s"] = round(time.time() - t0, 2)
 
         t0 = time.time()
-        evidence = self.retrieval_agent.retrieve(lesion_findings, top_k=top_k_evidence)
+        evidence = self.retrieval_agent.retrieve_sync(lesion_findings, top_k=top_k_evidence)
         timings["evidence_retrieval_s"] = round(time.time() - t0, 2)
 
         t0 = time.time()
@@ -84,8 +84,9 @@ class AMRAGOrchestrator:
         )
         timings["explainability_s"] = round(time.time() - t0, 2)
 
-        # Grad-CAM map is a numpy array -- keep separate from the JSON-safe report
+        # Grad-CAM maps are numpy arrays -- keep separate from the JSON-safe report
         gradcam_map = lesion_findings.pop("gradcam_map", None)
+        lesion_gradcam_maps = lesion_findings.pop("lesion_gradcam_maps", None)
         lesion_findings.pop("fused_features", None)  # not JSON-serializable, internal only
 
         report = {
@@ -99,4 +100,4 @@ class AMRAGOrchestrator:
             "explanation": explanation,
             "timings": timings,
         }
-        return report, gradcam_map
+        return report, gradcam_map, lesion_gradcam_maps
