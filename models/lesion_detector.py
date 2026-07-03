@@ -86,21 +86,6 @@ class CNNViTHybridLesionDetector(nn.Module):
         self._register_gradcam_hook(target_grid=14)
 
     def _register_gradcam_hook(self, target_grid: int = 14, dummy_input_size: int = 224):
-        """Hook a CNN conv layer for Grad-CAM.
-
-        The naive "literal last Conv2d" (previously used) resolves to
-        EfficientNet-B3's conv_head, whose output grid is only ~7x7 for a
-        224px input -- upsampled 32x to the display size, which is why
-        small lesions (microaneurysms, small hemorrhages) show up as one
-        diffuse blob rather than distinct regions.
-
-        Instead, run a dummy forward pass, record every Conv2d layer's
-        output spatial resolution, and pick the layer whose grid size is
-        closest to `target_grid` (default 14x14 -- one stage earlier than
-        the head, still deep enough to be semantically meaningful, but
-        4x the spatial resolution of the final 7x7 grid). This is robust
-        to backbone changes since it doesn't hardcode a module path.
-        """
         candidates = []
 
         def make_probe(name, mod):
@@ -111,7 +96,7 @@ class CNNViTHybridLesionDetector(nn.Module):
 
         probe_handles = []
         for name, m in self.cnn.named_modules():
-            if isinstance(m, (nn.BatchNorm2d, nn.SiLU, nn.GELU, nn.ReLU)):
+            if isinstance(m, nn.Conv2d):
                 probe_handles.append(m.register_forward_hook(make_probe(name, m)))
 
         was_training = self.cnn.training
@@ -124,33 +109,40 @@ class CNNViTHybridLesionDetector(nn.Module):
         for h in probe_handles:
             h.remove()
 
-        target_layer = None
+        target_name, target_conv = None, None
         if candidates:
-            target_layer = min(candidates, key=lambda c: abs(c[2] - target_grid))[1]
+            target_name, target_conv, _ = min(candidates, key=lambda c: abs(c[2] - target_grid))
         else:
-            for m in self.cnn.modules():
+            for name, m in self.cnn.named_modules():
                 if isinstance(m, nn.Conv2d):
-                    target_layer = m
+                    target_name, target_conv = name, m
+
+        target_layer = target_conv
+        if target_name is not None:
+            parent_name = target_name.rsplit(".", 1)[0] if "." in target_name else ""
+            parent = self.cnn.get_submodule(parent_name) if parent_name else self.cnn
+            conv_attr = target_name.rsplit(".", 1)[-1]
+
+            found_conv = False
+            for child_name, child in parent.named_children():
+                if child_name == conv_attr:
+                    found_conv = True
+                    continue
+                if not found_conv:
+                    continue
+                if isinstance(child, nn.BatchNorm2d):
+                    target_layer = child  # keep scanning -- activation may follow
+                elif isinstance(child, (nn.SiLU, nn.GELU, nn.ReLU)):
+                    target_layer = child
+                    break
+                else:
+                    break  # hit something else (e.g. SE block) -- stop, use what we have
 
         def hook(module, inp, out):
             self._last_conv_features = out
 
         if target_layer is not None:
             target_layer.register_forward_hook(hook)
-            # IMPORTANT: do not do `self._gradcam_layer = target_layer` here.
-            # target_layer is an nn.Module (a Conv2d already registered under
-            # its real path, e.g. cnn.blocks.3.0.conv_dw). A plain attribute
-            # assignment of an nn.Module triggers nn.Module.__setattr__'s
-            # auto-registration, which silently adds a SECOND, duplicate
-            # entry to state_dict as "_gradcam_layer.weight" pointing at the
-            # same tensor. That duplicate key is harmless until the target
-            # layer selection logic ever changes (e.g. between training and
-            # inference code versions) -- then the duplicate key's saved
-            # shape no longer matches the newly-selected layer's shape, and
-            # load_state_dict() fails with a size mismatch even though the
-            # real weights (under the true path) are perfectly fine.
-            # object.__setattr__ bypasses nn.Module's hook so this stays a
-            # plain Python reference, never touching state_dict.
             object.__setattr__(self, "_gradcam_layer", target_layer)
         else:
             object.__setattr__(self, "_gradcam_layer", None)
