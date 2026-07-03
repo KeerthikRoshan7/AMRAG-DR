@@ -61,7 +61,7 @@ if uploaded_file:
     # Create columns for initial display
     c1, c2 = st.columns(2)
     with c1:
-        st.image(image, caption="Uploaded fundus image", use_container_width=True)
+        st.image(image, caption="Uploaded fundus image", width='stretch')
 
     if st.button("Run AM-RAG Analysis", type="primary"):
         metadata = {k: v for k, v in {
@@ -107,7 +107,7 @@ if uploaded_file:
 
             if cam_to_show is not None:
                 overlay = overlay_gradcam(image, cam_to_show)
-                st.image(overlay, caption=f"Grad-CAM++ attention overlay ({selected_view})", use_container_width=True)
+                st.image(overlay, caption=f"Grad-CAM++ attention overlay ({selected_view})", width='stretch')
             else:
                 st.warning("Grad-CAM map could not be generated.")
 
