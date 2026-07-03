@@ -1,128 +1,103 @@
 """
-Agent 2: Evidence Retrieval Agent
+Agentic Clinical Reasoning Engine orchestrator (AM-RAG Section 5.1, module 5).
 
-Responsibilities: Query local FAISS KB and live public sources (PubMed,
-Europe PMC, ClinicalTrials.gov), merge and rank into a single evidence set.
+Runs the full pipeline (Algorithm 1, Section 5.9):
+  1. Preprocess image            -> handled by LesionAnalysisAgent internally
+  2. Detect lesions              -> LesionAnalysisAgent
+  3. Extract visual features     -> LesionAnalysisAgent (fused_features)
+  4. Generate clinical query     -> EvidenceRetrievalAgent
+  5. Retrieve Top-K documents    -> EvidenceRetrievalAgent
+  6. Fuse image + text features  -> (implicit: passed together into reasoning)
+  7. Agentic clinical reasoning  -> DiagnosticReasoningAgent + ReferralAgent
+  8. Generate explainable report -> ExplainabilityAgent + report assembly
+  9. Provide referral recommendation -> ReferralAgent (step 7)
 
-Knowledge Sources:
-  - Local: AAO/ICO Guidelines, Hospital Protocols (knowledge_base/documents/*.md)
-  - Live: PubMed, Europe PMC, ClinicalTrials.gov (knowledge_base/web_retriever.py)
-
-Input: Structured lesion findings from Agent 1.
-Output: Set of Top-K retrieved clinical evidence chunks R = {r1, ..., rk},
-each carrying a source_url and clean sentence-level text for citation display
-(Section 5.3.3).
+Returns a single structured report dict consumed by the API / Streamlit app.
 """
 
-from __future__ import annotations
+import time
+import torch
+import numpy as np
+from PIL import Image
+from agents.lesion_analysis_agent import LesionAnalysisAgent
+from agents.evidence_retrieval_agent import EvidenceRetrievalAgent
+from agents.diagnostic_reasoning_agent import DiagnosticReasoningAgent
+from agents.referral_agent import ReferralAgent
+from agents.explainability_agent import ExplainabilityAgent
+from agents.llm_client import LLMClient
 
-import asyncio
-import concurrent.futures
 
-from knowledge_base.retriever import KnowledgeRetriever
-from knowledge_base.web_retriever import WebEvidenceRetriever, EvidenceChunk
-
-
-class EvidenceRetrievalAgent:
-    def __init__(
-        self,
-        local_retriever: KnowledgeRetriever | None = None,
-        web_retriever: WebEvidenceRetriever | None = None,
-        use_web: bool = True,
-    ):
-        self.local_retriever = local_retriever or KnowledgeRetriever()
-        self.web_retriever = web_retriever or WebEvidenceRetriever(
-            embedder=getattr(self.local_retriever, "embedder", None)
+class AMRAGOrchestrator:
+    def __init__(self, checkpoint_path: str | None = None, device: str = "cpu"):
+        llm_client = LLMClient()
+        
+        # 1. Load the model ONCE during initialization
+        self.model = None
+        if checkpoint_path:
+            self.model = self.load_checkpoint(checkpoint_path)
+            
+        # 2. Pass the model instance to the agent
+        self.lesion_agent = LesionAnalysisAgent(
+            checkpoint_path=checkpoint_path, 
+            model=self.model, 
+            device=device
         )
-        self.use_web = use_web
+        
+        self.retrieval_agent = EvidenceRetrievalAgent()
+        self.diagnostic_agent = DiagnosticReasoningAgent(llm_client=llm_client)
+        self.referral_agent = ReferralAgent(llm_client=llm_client)
+        self.explainability_agent = ExplainabilityAgent(llm_client=llm_client)
+      
+    def load_checkpoint(self, checkpoint_path):
+      torch.serialization.add_safe_globals([
+        np.core.multiarray.scalar,
+        np.dtype,
+        np.dtypes.Float64DType
+      ])
+      return torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+      
+    def run(self, image: Image.Image, patient_metadata: dict | None = None,
+            top_k_evidence: int = 5) -> dict:
+        timings = {}
 
-    def build_clinical_query(self, lesion_findings: dict) -> str:
-        """Turn structured lesion findings into a natural-language query
-        for semantic retrieval (Section 5.4.2: Detected Lesions -> Clinical
-        Query Generation)."""
-        burden = lesion_findings["lesion_burden"]
-        active_findings = [
-            name.replace("_", " ") for name, val in burden.items() if val > 0.15
-        ]
-        findings_str = ", ".join(active_findings) if active_findings else "no significant lesions"
+        t0 = time.time()
+        lesion_findings = self.lesion_agent.analyze(image)
+        timings["lesion_analysis_s"] = round(time.time() - t0, 2)
 
-        query = (
-            f"Diabetic retinopathy severity grading and management for a patient "
-            f"presenting with: {findings_str}. Predicted severity level: "
-            f"{lesion_findings['severity_label']}. What are the grading criteria, "
-            f"follow-up interval, and treatment considerations?"
+        t0 = time.time()
+        evidence = self.retrieval_agent.retrieve_sync(lesion_findings, top_k=top_k_evidence)
+        timings["evidence_retrieval_s"] = round(time.time() - t0, 2)
+
+        t0 = time.time()
+        diagnostic_result = self.diagnostic_agent.reason(
+            lesion_findings, evidence, patient_metadata=patient_metadata
         )
-        return query
+        timings["diagnostic_reasoning_s"] = round(time.time() - t0, 2)
 
-    async def retrieve(self, lesion_findings: dict, top_k: int = 5) -> list[dict]:
-        query = self.build_clinical_query(lesion_findings)
+        t0 = time.time()
+        referral_result = self.referral_agent.recommend(diagnostic_result)
+        timings["referral_recommendation_s"] = round(time.time() - t0, 2)
 
-        # Local KB retrieval stays synchronous (FAISS is fast in-process),
-        # web retrieval runs concurrently against it.
-        local_task = asyncio.to_thread(self.local_retriever.retrieve, query, top_k)
+        t0 = time.time()
+        explanation = self.explainability_agent.explain(
+            lesion_findings, diagnostic_result, referral_result
+        )
+        timings["explainability_s"] = round(time.time() - t0, 2)
 
-        if self.use_web:
-            web_task = self.web_retriever.retrieve(query, top_k=top_k)
-            local_results, web_chunks = await asyncio.gather(
-                local_task, web_task, return_exceptions=True
-            )
-        else:
-            local_results = await local_task
-            web_chunks = []
+        # Grad-CAM maps are numpy arrays -- keep separate from the JSON-safe report
+        gradcam_map = lesion_findings.pop("gradcam_map", None)
+        lesion_gradcam_maps = lesion_findings.pop("lesion_gradcam_maps", None)
+        lesion_findings.pop("fused_features", None)  # not JSON-serializable, internal only
 
-        merged: list[EvidenceChunk] = []
-
-        if isinstance(local_results, Exception):
-            print(f"[EvidenceRetrievalAgent] local retrieval failed: {local_results!r}")
-        else:
-            for r in local_results:
-                merged.append(EvidenceChunk(
-                    text=r["text"],
-                    source_url=r.get("source", "local://knowledge_base/documents"),
-                    title=r.get("source", "Local clinical protocol"),
-                    source_type="local",
-                    relevance_score=r.get("score", 0.0),
-                ))
-
-        if isinstance(web_chunks, Exception):
-            print(f"[EvidenceRetrievalAgent] web retrieval failed: {web_chunks!r}")
-        else:
-            merged.extend(web_chunks)
-
-        # Global re-rank across local + web, then dedupe near-identical sentences
-        merged.sort(key=lambda c: c.relevance_score, reverse=True)
-        deduped = self._dedupe(merged)
-
-        return [c.to_dict() for c in deduped[:top_k]]
-
-    def retrieve_sync(self, lesion_findings: dict, top_k: int = 5) -> list[dict]:
-        """Sync wrapper for callers that aren't async (e.g. the Streamlit app
-        and AMRAGOrchestrator.run, which stay synchronous end-to-end)."""
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop (typical for Streamlit/CLI) -- safe to use asyncio.run
-            return asyncio.run(self.retrieve(lesion_findings, top_k))
-
-        # A loop is already running (e.g. inside Jupyter) -- run in a
-        # separate thread with its own loop instead of nesting asyncio.run.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, self.retrieve(lesion_findings, top_k))
-            return future.result()
-
-    @staticmethod
-    def _dedupe(chunks: list[EvidenceChunk], threshold: float = 0.9) -> list[EvidenceChunk]:
-        """Drop near-duplicate sentences (e.g. the same guideline text appearing
-        in both a local document and a PubMed abstract)."""
-        kept: list[EvidenceChunk] = []
-        seen_texts: list[set[str]] = []
-        for chunk in chunks:
-            words = set(chunk.text.lower().split())
-            is_dup = any(
-                len(words & prev) / max(len(words | prev), 1) > threshold
-                for prev in seen_texts
-            )
-            if not is_dup:
-                kept.append(chunk)
-                seen_texts.append(words)
-        return kept
+        report = {
+            "model_checkpoint_status": "trained" if lesion_findings.pop("is_trained_checkpoint") else "UNTRAINED_DEMO_MODE",
+            "lesion_findings": lesion_findings,
+            "retrieved_evidence": evidence,
+            "diagnosis": {
+                k: v for k, v in diagnostic_result.items() if not k.startswith("_")
+            },
+            "referral": referral_result,
+            "explanation": explanation,
+            "timings": timings,
+        }
+        return report, gradcam_map, lesion_gradcam_maps
