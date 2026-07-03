@@ -1,103 +1,50 @@
 """
-Agentic Clinical Reasoning Engine orchestrator (AM-RAG Section 5.1, module 5).
+Agent 2: Evidence Retrieval Agent (AM-RAG Section 5.3.1)
 
-Runs the full pipeline (Algorithm 1, Section 5.9):
-  1. Preprocess image            -> handled by LesionAnalysisAgent internally
-  2. Detect lesions              -> LesionAnalysisAgent
-  3. Extract visual features     -> LesionAnalysisAgent (fused_features)
-  4. Generate clinical query     -> EvidenceRetrievalAgent
-  5. Retrieve Top-K documents    -> EvidenceRetrievalAgent
-  6. Fuse image + text features  -> (implicit: passed together into reasoning)
-  7. Agentic clinical reasoning  -> DiagnosticReasoningAgent + ReferralAgent
-  8. Generate explainable report -> ExplainabilityAgent + report assembly
-  9. Provide referral recommendation -> ReferralAgent (step 7)
-
-Returns a single structured report dict consumed by the API / Streamlit app.
+Responsibilities:
+1. Generate a clinical query based on visual findings.
+2. Retrieve relevant evidence from the ophthalmology knowledge base.
 """
 
-import time
-import torch
-import numpy as np
-from PIL import Image
-from agents.lesion_analysis_agent import LesionAnalysisAgent
-from agents.evidence_retrieval_agent import EvidenceRetrievalAgent
-from agents.diagnostic_reasoning_agent import DiagnosticReasoningAgent
-from agents.referral_agent import ReferralAgent
-from agents.explainability_agent import ExplainabilityAgent
-from agents.llm_client import LLMClient
+import asyncio
+from knowledge_base.web_retriever import WebEvidenceRetriever
 
 
-class AMRAGOrchestrator:
-    def __init__(self, checkpoint_path: str | None = None, device: str = "cpu"):
-        llm_client = LLMClient()
+class EvidenceRetrievalAgent:
+    def __init__(self):
+        # We don't load the embedder here to keep it lightweight, 
+        # WebEvidenceRetriever will use lexical fallback or we can pass one if needed.
+        self.retriever = WebEvidenceRetriever()
+
+    async def retrieve(self, lesion_findings: dict, top_k: int = 5) -> list[dict]:
+        """
+        Generate a query from lesion findings and retrieve evidence.
+        """
+        # Create a clinical query from findings
+        severity = lesion_findings.get("severity_label", "diabetic retinopathy")
+        lesions = [name.replace("_", " ") for name, val in lesion_findings.get("lesion_burden", {}).items() if val > 0.2]
         
-        # 1. Load the model ONCE during initialization
-        self.model = None
-        if checkpoint_path:
-            self.model = self.load_checkpoint(checkpoint_path)
+        query = f"diabetic retinopathy {severity}"
+        if lesions:
+            query += " with " + ", ".join(lesions)
             
-        # 2. Pass the model instance to the agent
-        self.lesion_agent = LesionAnalysisAgent(
-            checkpoint_path=checkpoint_path, 
-            model=self.model, 
-            device=device
-        )
-        
-        self.retrieval_agent = EvidenceRetrievalAgent()
-        self.diagnostic_agent = DiagnosticReasoningAgent(llm_client=llm_client)
-        self.referral_agent = ReferralAgent(llm_client=llm_client)
-        self.explainability_agent = ExplainabilityAgent(llm_client=llm_client)
-      
-    def load_checkpoint(self, checkpoint_path):
-      torch.serialization.add_safe_globals([
-        np.core.multiarray.scalar,
-        np.dtype,
-        np.dtypes.Float64DType
-      ])
-      return torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-      
-    def run(self, image: Image.Image, patient_metadata: dict | None = None,
-            top_k_evidence: int = 5) -> dict:
-        timings = {}
+        # Perform retrieval
+        evidence_chunks = await self.retriever.retrieve(query, top_k=top_k)
+        return [chunk.to_dict() for chunk in evidence_chunks]
 
-        t0 = time.time()
-        lesion_findings = self.lesion_agent.analyze(image)
-        timings["lesion_analysis_s"] = round(time.time() - t0, 2)
-
-        t0 = time.time()
-        evidence = self.retrieval_agent.retrieve_sync(lesion_findings, top_k=top_k_evidence)
-        timings["evidence_retrieval_s"] = round(time.time() - t0, 2)
-
-        t0 = time.time()
-        diagnostic_result = self.diagnostic_agent.reason(
-            lesion_findings, evidence, patient_metadata=patient_metadata
-        )
-        timings["diagnostic_reasoning_s"] = round(time.time() - t0, 2)
-
-        t0 = time.time()
-        referral_result = self.referral_agent.recommend(diagnostic_result)
-        timings["referral_recommendation_s"] = round(time.time() - t0, 2)
-
-        t0 = time.time()
-        explanation = self.explainability_agent.explain(
-            lesion_findings, diagnostic_result, referral_result
-        )
-        timings["explainability_s"] = round(time.time() - t0, 2)
-
-        # Grad-CAM maps are numpy arrays -- keep separate from the JSON-safe report
-        gradcam_map = lesion_findings.pop("gradcam_map", None)
-        lesion_gradcam_maps = lesion_findings.pop("lesion_gradcam_maps", None)
-        lesion_findings.pop("fused_features", None)  # not JSON-serializable, internal only
-
-        report = {
-            "model_checkpoint_status": "trained" if lesion_findings.pop("is_trained_checkpoint") else "UNTRAINED_DEMO_MODE",
-            "lesion_findings": lesion_findings,
-            "retrieved_evidence": evidence,
-            "diagnosis": {
-                k: v for k, v in diagnostic_result.items() if not k.startswith("_")
-            },
-            "referral": referral_result,
-            "explanation": explanation,
-            "timings": timings,
-        }
-        return report, gradcam_map, lesion_gradcam_maps
+    def retrieve_sync(self, lesion_findings: dict, top_k: int = 5) -> list[dict]:
+        """Synchronous wrapper for retrieve()."""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        if loop.is_running():
+            # If we're already in an event loop (e.g. FastAPI/Streamlit), 
+            # we might need a different approach, but for now this is standard.
+            import nest_asyncio
+            nest_asyncio.apply()
+            return loop.run_until_complete(self.retrieve(lesion_findings, top_k=top_k))
+        else:
+            return loop.run_until_complete(self.retrieve(lesion_findings, top_k=top_k))
