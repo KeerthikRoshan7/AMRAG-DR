@@ -18,8 +18,14 @@ def overlay_gradcam(original_image: Image.Image, cam: np.ndarray, alpha: float =
     h, w = orig_np.shape[:2]
 
     cam_resized = cv2.resize(cam, (w, h))
+    
+    # Apply a threshold to remove low-confidence noise
+    cam_resized[cam_resized < 0.2] = 0
+    
     heatmap = cv2.applyColorMap(np.uint8(255 * cam_resized), cv2.COLORMAP_JET)
     heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
 
-    overlay = (alpha * heatmap + (1 - alpha) * orig_np).astype(np.uint8)
+    # Use the CAM as a mask for the overlay
+    mask = cam_resized[..., np.newaxis]
+    overlay = (alpha * heatmap * mask + (1 - alpha * mask) * orig_np).astype(np.uint8)
     return Image.fromarray(overlay)
