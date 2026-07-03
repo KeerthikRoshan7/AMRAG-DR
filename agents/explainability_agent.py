@@ -1,5 +1,5 @@
 """
-Agent 5: Explainability Agent (AM-RAG Section 5.3.2)
+Agent 5: Explainability Agent
 
 Responsibilities: Produce textual explanation, generate lesion attention
 maps, justify decisions.
