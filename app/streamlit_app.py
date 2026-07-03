@@ -85,11 +85,15 @@ with st.sidebar:
                         img_root = os.path.join(tmpdir, DEFAULT_IMG_DIR)
                         
                         if os.path.exists(csv_path):
-                            df = pd.read_csv(csv_path).head(50) # Benchmark sample size
+                            df = pd.read_csv(csv_path).head(24) # Reduced sample size to avoid rate limits
                             orchestrator = get_orchestrator()
                             results = []
                             
                             for _, row in df.iterrows():
+                                # Basic rate limit protection
+                                time.sleep(1) 
+                                
+                                img_id = str(row["id_code"])
                                 img_id = str(row["id_code"])
                                 img_path = os.path.join(img_root, img_id + ".png")
                                 if not os.path.exists(img_path):
