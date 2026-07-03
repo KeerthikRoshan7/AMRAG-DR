@@ -72,13 +72,24 @@ if uploaded_file:
 
     # Rendering section: Display results if they exist in session state
     if st.session_state.analysis_results:
-        report, gradcam_map = st.session_state.analysis_results
-        
+        report, gradcam_map, lesion_gradcam_maps = st.session_state.analysis_results
+
         with c2:
             st.subheader("Grad-CAM Analysis")
-            if gradcam_map is not None:
-                overlay = overlay_gradcam(image, gradcam_map)
-                st.image(overlay, caption="Grad-CAM attention overlay", use_container_width=True)
+            view_options = ["Overall severity"] + (
+                [name.replace("_", " ").title() for name in (lesion_gradcam_maps or {})]
+            )
+            selected_view = st.selectbox("Localize by", view_options)
+
+            if selected_view == "Overall severity":
+                cam_to_show = gradcam_map
+            else:
+                key = selected_view.lower().replace(" ", "_")
+                cam_to_show = (lesion_gradcam_maps or {}).get(key)
+
+            if cam_to_show is not None:
+                overlay = overlay_gradcam(image, cam_to_show)
+                st.image(overlay, caption=f"Grad-CAM++ attention overlay ({selected_view})", use_container_width=True)
             else:
                 st.warning("Grad-CAM map could not be generated.")
 
@@ -104,8 +115,16 @@ if uploaded_file:
 
         st.subheader("📚 Retrieved Clinical Evidence")
         for i, ev in enumerate(report["retrieved_evidence"]):
-            with st.expander(f"[{i+1}] {ev['source']} (relevance: {ev['score']:.2f})"):
-                st.write(ev["text"])
+            badge = ev.get("source_type", "local").upper()
+            meta_bits = [b for b in [ev.get("journal"), str(ev.get("year") or "")] if b]
+            meta_str = f" · {' · '.join(meta_bits)}" if meta_bits else ""
+            header = f"[{i+1}] {badge}{meta_str} (relevance: {ev.get('relevance_score', 0):.2f})"
+            with st.expander(header):
+                st.write(f"“{ev['text']}”")
+                if ev.get("source_type", "local") != "local":
+                    st.markdown(f"[{ev.get('title', 'View source')}]({ev['source_url']})")
+                else:
+                    st.caption(f"Source: {ev.get('title', ev.get('source_url'))}")
 
         st.subheader("🏥 Referral Recommendation")
         r = report["referral"]
