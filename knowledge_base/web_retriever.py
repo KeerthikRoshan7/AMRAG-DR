@@ -321,29 +321,29 @@ class WebEvidenceRetriever:
         self.embedder = embedder
 
     async def retrieve(self, query: str, top_k: int = 5) -> list[EvidenceChunk]:
-        cached = self.cache.get(query)
-        if cached is not None:
-            return [EvidenceChunk(**c) for c in cached]
-        
-        results = await asyncio.gather(
-            self.pubmed.search(query, max_results=5),
-            self.europepmc.search(query, max_results=5),
-            self.ctgov.search(query, max_results=3),
-            return_exceptions=True,
-        )
+      cached = self.cache.get(query)
+      if cached is not None:
+        return [EvidenceChunk(**c) for c in cached]
 
-        all_chunks: list[EvidenceChunk] = []
-        for r in results:
-            if isinstance(r, Exception):
-                # One source failing (timeout, rate limit, schema change) must
-                # not take down retrieval -- log and move on.
-                print(f"[WebEvidenceRetriever] source failed: {r!r}")
-                continue
-            all_chunks.extend(r)
+      results = await asyncio.gather(
+        self.pubmed.search(query, max_results=5),
+        self.europepmc.search(query, max_results=5),
+        self.ctgov.search(query, max_results=3),
+        return_exceptions=True,
+    )
 
-        ranked = self._rank(query, all_chunks)[:top_k]
+    all_chunks: list[EvidenceChunk] = []
+    for r in results:
+        if isinstance(r, Exception):
+            print(f"[WebEvidenceRetriever] source failed: {r!r}")
+            continue
+        all_chunks.extend(r)
+
+    ranked = self._rank(query, all_chunks)[:top_k]
+    if len(ranked) >= 1:
         self.cache.set(query, [c.to_dict() for c in ranked])
-        return ranked
+
+    return ranked
 
     def _rank(self, query: str, chunks: list[EvidenceChunk]) -> list[EvidenceChunk]:
         if not chunks:
