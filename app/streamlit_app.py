@@ -33,19 +33,6 @@ DEFAULT_IMG_DIR = "train_images/train_images"
 
 @st.cache_resource(show_spinner="Loading AM-RAG pipeline...")
 def get_orchestrator():
-    # Load all Groq keys from secrets for rotation
-    keys = []
-    if "GROQ_API_KEY" in st.secrets:
-        keys.append(st.secrets["GROQ_API_KEY"])
-    for i in range(1, 11):
-        k_name = f"GROQ_API_KEY_{i}"
-        if k_name in st.secrets:
-            keys.append(st.secrets[k_name])
-            
-    # Inject keys into environment for LLMClient
-    for i, k in enumerate(keys):
-        os.environ[f"GROQ_API_KEY_{i+1}"] = k
-
     local_checkpoint = "checkpoints/best_model.pt"
     if not os.path.exists(local_checkpoint):
         try:
@@ -98,15 +85,14 @@ with st.sidebar:
                         img_root = os.path.join(tmpdir, DEFAULT_IMG_DIR)
                         
                         if os.path.exists(csv_path):
-                            df = pd.read_csv(csv_path).head(24) # Reduced sample size to avoid rate limits
+                            df = pd.read_csv(csv_path).head(24) # Reduced sample size
                             orchestrator = get_orchestrator()
                             results = []
                             
                             for _, row in df.iterrows():
-                                # Basic rate limit protection
-                                time.sleep(1) 
+                                # Pacing for rate limits
+                                time.sleep(1)
                                 
-                                img_id = str(row["id_code"])
                                 img_id = str(row["id_code"])
                                 img_path = os.path.join(img_root, img_id + ".png")
                                 if not os.path.exists(img_path):
