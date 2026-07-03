@@ -111,7 +111,7 @@ class CNNViTHybridLesionDetector(nn.Module):
 
         probe_handles = []
         for name, m in self.cnn.named_modules():
-            if isinstance(m, nn.Conv2d):
+            if isinstance(m, (nn.BatchNorm2d, nn.SiLU, nn.GELU, nn.ReLU)):
                 probe_handles.append(m.register_forward_hook(make_probe(name, m)))
 
         was_training = self.cnn.training
