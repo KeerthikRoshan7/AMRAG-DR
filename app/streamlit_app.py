@@ -60,12 +60,13 @@ with st.sidebar:
 
     st.markdown("---")
     st.header("Admin: Benchmark Evaluation")
-    st.write("Run a background evaluation using the APTOS 2019 dataset from Kaggle.")
-    
-    k_user = st.text_input("Kaggle Username", type="password")
-    k_key = st.text_input("Kaggle API Key", type="password")
+    st.write("Run a background evaluation using the APTOS 2019 dataset. Results will be printed to system logs.")
     
     if st.button("Run APTOS 2019 Benchmark & Log Metrics"):
+        # Pull from Streamlit Secrets
+        k_user = st.secrets.get("KAGGLE_USERNAME")
+        k_key = st.secrets.get("KAGGLE_KEY")
+        
         if k_user and k_key:
             with st.spinner("Pipelining APTOS 2019 data from Kaggle..."):
                 try:
@@ -89,7 +90,6 @@ with st.sidebar:
                             results = []
                             
                             for _, row in df.iterrows():
-                                # Check for .png or .jpg
                                 img_id = str(row["id_code"])
                                 img_path = os.path.join(img_root, img_id + ".png")
                                 if not os.path.exists(img_path):
@@ -140,7 +140,7 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Kaggle benchmark failed: {e}")
         else:
-            st.error("Please provide Kaggle Username and API Key.")
+            st.error("Kaggle credentials not found in Streamlit Secrets. Please add KAGGLE_USERNAME and KAGGLE_KEY.")
 
 uploaded_file = st.file_uploader("Upload a fundus image", type=["png", "jpg", "jpeg"])
 
@@ -154,7 +154,6 @@ if uploaded_file:
     # Create columns for initial display
     c1, c2 = st.columns(2)
     with c1:
-        # width='stretch'
         st.image(image, caption="Uploaded fundus image", width='stretch')
 
     if st.button("Run AM-RAG Analysis", type="primary"):
@@ -196,7 +195,6 @@ if uploaded_file:
 
             if cam_to_show is not None:
                 overlay = overlay_gradcam(image, cam_to_show)
-                # width='stretch'
                 st.image(overlay, caption=f"Grad-CAM++ attention overlay ({selected_view})", width='stretch')
             else:
                 st.warning("Grad-CAM map could not be generated.")
