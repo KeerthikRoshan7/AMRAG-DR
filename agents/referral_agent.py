@@ -7,6 +7,7 @@ Example Output (from paper): "Referral Required: Within 3 Months."
 """
 
 from agents.llm_client import LLMClient
+from agents.evidence_formatting import format_evidence
 
 SYSTEM_PROMPT = """You are the Referral Recommendation Agent inside AM-RAG.
 Given a diagnostic reasoning result and its supporting evidence, determine:
@@ -42,10 +43,7 @@ class ReferralAgent:
 
     def recommend(self, diagnostic_result: dict) -> dict:
         evidence = diagnostic_result.get("_retrieved_evidence", [])
-        evidence_str = "\n\n".join(
-           f"[{i+1}] (source: {e.get('source') or e.get('title') or e.get('source_url', 'unknown source')})\n{e.get('text', '')}"
-           for i, e in enumerate(evidence)
-        ) or "No evidence retrieved."
+        evidence_str = format_evidence(evidence)
 
         user_prompt = USER_PROMPT_TEMPLATE.format(
             severity_grade=diagnostic_result.get("severity_grade"),
