@@ -13,6 +13,7 @@ Pillow
 sentence-transformers
 faiss-cpu
 tiktoken
+httpx
 
 # --- LLM ---
 groq
