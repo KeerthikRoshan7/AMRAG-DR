@@ -33,6 +33,19 @@ DEFAULT_IMG_DIR = "train_images/train_images"
 
 @st.cache_resource(show_spinner="Loading AM-RAG pipeline...")
 def get_orchestrator():
+    # Load all Groq keys from secrets for rotation
+    keys = []
+    if "GROQ_API_KEY" in st.secrets:
+        keys.append(st.secrets["GROQ_API_KEY"])
+    for i in range(1, 11):
+        k_name = f"GROQ_API_KEY_{i}"
+        if k_name in st.secrets:
+            keys.append(st.secrets[k_name])
+            
+    # Inject keys into environment for LLMClient
+    for i, k in enumerate(keys):
+        os.environ[f"GROQ_API_KEY_{i+1}"] = k
+
     local_checkpoint = "checkpoints/best_model.pt"
     if not os.path.exists(local_checkpoint):
         try:
