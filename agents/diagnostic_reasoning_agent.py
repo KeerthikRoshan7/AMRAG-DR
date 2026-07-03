@@ -1,5 +1,5 @@
 """
-Agent 3: Diagnostic Reasoning Agent
+Agent 3: Diagnostic Reasoning Agent (AM-RAG Section 5.3.3)
 
 The central intelligence component. Implements the five-stage multimodal
 reasoning workflow:
@@ -88,6 +88,11 @@ class DiagnosticReasoningAgent:
         )
 
         result = self.llm.complete_json(SYSTEM_PROMPT, user_prompt, temperature=0.1)
+        
+        # Ensure confidence_score is present and valid
+        if "confidence_score" not in result:
+            result["confidence_score"] = lesion_findings.get("severity_confidence", 0.5)
+            
         result["_model_predicted_severity"] = lesion_findings["severity_label"]
         result["_retrieved_evidence"] = evidence
         return result
