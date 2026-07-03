@@ -255,10 +255,22 @@ class ClinicalTrialsClient:
     def __init__(self, timeout: float = 8.0):
         self.timeout = timeout
 
+    @staticmethod
+    def _sanitize_query(query: str, max_words: int = 8) -> str:
+        """ClinicalTrials.gov's query.term uses Essie syntax, where colons,
+        brackets, and other punctuation are parsed as field-query operators
+        (e.g. AREA[Field]:value). A prose sentence like '...presenting
+        with: X. Predicted severity level: Y...' gets misparsed by Essie
+        and the API returns 400. Strip punctuation and keep it short."""
+        stripped = re.sub(r"[^\w\s]", " ", query)
+        words = stripped.split()
+        return " ".join(words[:max_words])
+
     async def search(self, query: str, max_results: int = 5) -> list[EvidenceChunk]:
+        term = self._sanitize_query(query)
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             params = {
-                "query.term": query,
+                "query.term": term,
                 "pageSize": max_results,
                 "fields": "NCTId,BriefTitle,BriefSummary,OverallStatus",
             }
