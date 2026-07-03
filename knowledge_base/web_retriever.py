@@ -342,7 +342,6 @@ class WebEvidenceRetriever:
     ranked = self._rank(query, all_chunks)[:top_k]
     if len(ranked) >= 1:
         self.cache.set(query, [c.to_dict() for c in ranked])
-
     return ranked
 
     def _rank(self, query: str, chunks: list[EvidenceChunk]) -> list[EvidenceChunk]:
