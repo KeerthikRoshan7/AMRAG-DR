@@ -137,9 +137,23 @@ class CNNViTHybridLesionDetector(nn.Module):
 
         if target_layer is not None:
             target_layer.register_forward_hook(hook)
-            self._gradcam_layer = target_layer
+            # IMPORTANT: do not do `self._gradcam_layer = target_layer` here.
+            # target_layer is an nn.Module (a Conv2d already registered under
+            # its real path, e.g. cnn.blocks.3.0.conv_dw). A plain attribute
+            # assignment of an nn.Module triggers nn.Module.__setattr__'s
+            # auto-registration, which silently adds a SECOND, duplicate
+            # entry to state_dict as "_gradcam_layer.weight" pointing at the
+            # same tensor. That duplicate key is harmless until the target
+            # layer selection logic ever changes (e.g. between training and
+            # inference code versions) -- then the duplicate key's saved
+            # shape no longer matches the newly-selected layer's shape, and
+            # load_state_dict() fails with a size mismatch even though the
+            # real weights (under the true path) are perfectly fine.
+            # object.__setattr__ bypasses nn.Module's hook so this stays a
+            # plain Python reference, never touching state_dict.
+            object.__setattr__(self, "_gradcam_layer", target_layer)
         else:
-            self._gradcam_layer = None
+            object.__setattr__(self, "_gradcam_layer", None)
 
     def forward(self, x: torch.Tensor):
         """
@@ -174,6 +188,28 @@ SEVERITY_LABELS = [
 ]
 
 
+def load_state_dict_compat(model: "CNNViTHybridLesionDetector", state_dict: dict) -> None:
+    """Load a state_dict, tolerating the (now-fixed) duplicate '_gradcam_layer.*'
+    keys present in checkpoints trained before the object.__setattr__ fix above.
+
+    Those keys were always a duplicate of a real weight tensor already present
+    under its true module path (e.g. 'cnn.blocks.3.0.conv_dw.weight') -- so
+    dropping them loses nothing. Any OTHER missing/unexpected key still raises,
+    since that would indicate a genuine architecture mismatch rather than this
+    known, harmless duplication.
+    """
+    cleaned = {k: v for k, v in state_dict.items() if not k.startswith("_gradcam_layer.")}
+    result = model.load_state_dict(cleaned, strict=False)
+
+    real_missing = [k for k in result.missing_keys if not k.startswith("_gradcam_layer.")]
+    real_unexpected = [k for k in result.unexpected_keys if not k.startswith("_gradcam_layer.")]
+    if real_missing or real_unexpected:
+        raise RuntimeError(
+            f"Checkpoint mismatch beyond the known _gradcam_layer duplicate: "
+            f"missing={real_missing}, unexpected={real_unexpected}"
+        )
+
+
 def load_detector(checkpoint_path: str | None, device: str = "cpu",
                    config: LesionDetectorConfig = LesionDetectorConfig()):
     """Load the detector. If checkpoint_path is None or missing, returns an
@@ -185,7 +221,8 @@ def load_detector(checkpoint_path: str | None, device: str = "cpu",
     if checkpoint_path:
         try:
             state = torch.load(checkpoint_path, map_location=device)
-            model.load_state_dict(state["model_state_dict"] if "model_state_dict" in state else state)
+            sd = state["model_state_dict"] if "model_state_dict" in state else state
+            load_state_dict_compat(model, sd)
             is_trained = True
         except FileNotFoundError:
             pass
