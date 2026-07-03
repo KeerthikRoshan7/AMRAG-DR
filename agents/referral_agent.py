@@ -43,8 +43,8 @@ class ReferralAgent:
     def recommend(self, diagnostic_result: dict) -> dict:
         evidence = diagnostic_result.get("_retrieved_evidence", [])
         evidence_str = "\n\n".join(
-            f"[{i+1}] (source: {e['source']})\n{e['text']}"
-            for i, e in enumerate(evidence)
+           f"[{i+1}] (source: {e.get('source') or e.get('title') or e.get('source_url', 'unknown source')})\n{e.get('text', '')}"
+           for i, e in enumerate(evidence)
         ) or "No evidence retrieved."
 
         user_prompt = USER_PROMPT_TEMPLATE.format(
