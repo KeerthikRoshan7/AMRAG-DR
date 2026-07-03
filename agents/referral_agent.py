@@ -1,5 +1,5 @@
 """
-Agent 4: Referral Recommendation Agent (AM-RAG Section 5.3.2)
+Agent 4: Referral Recommendation Agent
 
 Responsibilities: Determine urgency, generate referral pathway, suggest
 follow-up schedule.
