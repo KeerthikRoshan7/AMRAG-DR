@@ -24,4 +24,5 @@ fastapi
 uvicorn[standard]
 python-multipart
 streamlit
+streamlit-image-comparison
 python-dotenv
