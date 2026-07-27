@@ -22,59 +22,13 @@ except ImportError:
 # Ensure project root is in path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Mock imports for environment where actual modules might not be present
-try:
-    from agents.orchestrator import AMRAGOrchestrator
-    from utils.gradcam import overlay_gradcam
-    from models.lesion_detector import SEVERITY_LABELS
-except ImportError:
-    class AMRAGOrchestrator:
-        def __init__(self, **kwargs): pass
-        def run(self, image, **kwargs): return {}, None, {}
-    def overlay_gradcam(img, cam): return img
-    SEVERITY_LABELS = ["No DR", "Mild", "Moderate", "Severe", "Proliferative"]
+from agents.orchestrator import AMRAGOrchestrator
+from utils.gradcam import overlay_gradcam
+from models.lesion_detector import SEVERITY_LABELS
 
 load_dotenv()
 
-st.set_page_config(
-    page_title="AM-RAG: Explainable DR Screening", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS for UI/UX improvements
-st.markdown("""
-    <style>
-    .main {
-        background-color: #f5f7f9;
-    }
-    .stMetric {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    .stExpander {
-        background-color: #ffffff;
-        border-radius: 10px;
-    }
-    .stButton>button {
-        width: 100%;
-        border-radius: 5px;
-        height: 3em;
-        font-weight: bold;
-    }
-    h1, h2, h3 {
-        color: #1e3a8a;
-    }
-    .referral-box {
-        padding: 20px;
-        border-radius: 10px;
-        background-color: #e0f2fe;
-        border-left: 5px solid #0369a1;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(page_title="AM-RAG: Explainable DR Screening", layout="wide")
 
 CHECKPOINT_PATH = os.environ.get("LESION_CHECKPOINT_PATH", "checkpoints/lesion_detector.pt")
 DEVICE = os.environ.get("DEVICE", "cpu")
@@ -101,22 +55,22 @@ def get_orchestrator():
     return AMRAGOrchestrator(checkpoint_path=model_path, device=DEVICE)
 
 # --- App Layout ---
-st.title("🩺 AM-RAG: Explainable Diabetic Retinopathy Screening")
-st.markdown("### Agentic Multimodal RAG for Clinical Decision Support")
+st.title("🩺 AM-RAG: Agentic Multimodal RAG for Diabetic Retinopathy Screening")
 
 # Sidebar for metadata and Kaggle-based evaluation
 with st.sidebar:
-    st.header("👤 Patient Metadata")
+    st.header("Patient Metadata")
     age = st.number_input("Age", min_value=0, max_value=120, value=0)
     dtype = st.selectbox("Diabetes type", ["Not specified", "Type 1", "Type 2", "Gestational"])
     duration = st.number_input("Diabetes duration (years)", min_value=0, max_value=80, value=0)
     hba1c = st.number_input("HbA1c (%)", min_value=0.0, max_value=20.0, value=0.0, step=0.1)
 
     st.markdown("---")
-    st.header("⚙️ Admin: Evaluation")
-    st.write("Run a background evaluation using the APTOS 2019 dataset.")
+    st.header("Admin: Benchmark Evaluation")
+    st.write("Run a background evaluation using the APTOS 2019 dataset. Results will be printed to system logs.")
     
-    if st.button("🚀 Run APTOS 2019 Benchmark"):
+    if st.button("Run APTOS 2019 Benchmark & Log Metrics"):
+        # Pull from Streamlit Secrets
         k_user = st.secrets.get("KAGGLE_USERNAME")
         k_key = st.secrets.get("KAGGLE_KEY")
         
@@ -131,17 +85,21 @@ with st.sidebar:
                     api.authenticate()
                     
                     with tempfile.TemporaryDirectory() as tmpdir:
+                        # Download APTOS 2019
                         api.dataset_download_files(DEFAULT_KAGLLE_DATASET, path=tmpdir, unzip=True)
+                        
                         csv_path = os.path.join(tmpdir, DEFAULT_CSV)
                         img_root = os.path.join(tmpdir, DEFAULT_IMG_DIR)
                         
                         if os.path.exists(csv_path):
-                            df = pd.read_csv(csv_path).head(24)
+                            df = pd.read_csv(csv_path).head(24) # Reduced sample size
                             orchestrator = get_orchestrator()
                             results = []
                             
                             for _, row in df.iterrows():
+                                # Pacing for rate limits
                                 time.sleep(1)
+                                
                                 img_id = str(row["id_code"])
                                 img_path = os.path.join(img_root, img_id + ".png")
                                 if not os.path.exists(img_path):
@@ -160,29 +118,55 @@ with st.sidebar:
                             if results:
                                 res_df = pd.DataFrame(results)
                                 targets = res_df["target"].values
+                                vision_preds = res_df["vision_pred"].values
+                                vision_probs = np.array(res_df["vision_probs"].tolist())
                                 reasoning_preds = res_df["reasoning_pred"].values
+
+                                vis_acc = accuracy_score(targets, vision_preds)
+                                try:
+                                    vis_auroc = roc_auc_score(targets, vision_probs, multi_class='ovr', average='macro')
+                                except:
+                                    vis_auroc = 0.0
+                                
                                 valid_reasoning = reasoning_preds != -1
                                 reas_acc = accuracy_score(targets[valid_reasoning], reasoning_preds[valid_reasoning]) if valid_reasoning.any() else 0.0
-                                st.success(f"Benchmark complete! Reasoning Acc: {reas_acc:.2f}")
+
+                                # --- PRINT TO LOGS ---
+                                print("\n" + "="*45)
+                                print(f" APTOS 2019 BENCHMARK REPORT - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                                print(f" Dataset: {DEFAULT_KAGLLE_DATASET}")
+                                print("="*45)
+                                print(f"Total Samples:      {len(results)}")
+                                print(f"Vision Accuracy:    {vis_acc:.4f}")
+                                print(f"Vision AUROC:       {vis_auroc:.4f}")
+                                print(f"Reasoning Accuracy: {reas_acc:.4f}")
+                                print("="*45 + "\n")
+                                
+                                st.success("Benchmark complete. Metrics printed to system logs.")
                             else:
-                                st.error("No valid images found.")
+                                st.error("No valid images found in the dataset.")
                         else:
-                            st.error(f"CSV file '{DEFAULT_CSV}' not found.")
+                            st.error(f"CSV file '{DEFAULT_CSV}' not found in dataset.")
                 except Exception as e:
                     st.error(f"Kaggle benchmark failed: {e}")
         else:
-            st.error("Kaggle credentials not found in Streamlit Secrets.")
+            st.error("Kaggle credentials not found in Streamlit Secrets. Please add KAGGLE_USERNAME and KAGGLE_KEY.")
 
-# --- Main App ---
-uploaded_file = st.file_uploader("📤 Upload a fundus image", type=["png", "jpg", "jpeg"])
+uploaded_file = st.file_uploader("Upload a fundus image", type=["png", "jpg", "jpeg"])
 
+# Use session state to persist results across reruns
 if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = None
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     
-    if st.button("🔍 Run AM-RAG Analysis", type="primary"):
+    # Create columns for initial display
+    c1, c2 = st.columns(2)
+    with c1:
+        st.image(image, caption="Uploaded fundus image", width=600)
+
+    if st.button("Run AM-RAG Analysis", type="primary"):
         metadata = {k: v for k, v in {
             "age": age if age > 0 else None,
             "diabetes_type": dtype if dtype != "Not specified" else None,
@@ -191,135 +175,104 @@ if uploaded_file:
         }.items() if v is not None}
 
         orchestrator = get_orchestrator()
-        with st.spinner("🧠 Agentic reasoning in progress..."):
+        with st.spinner("Agentic reasoning in progress..."):
             st.session_state.analysis_results = orchestrator.run(image, patient_metadata=metadata or None)
+            
+            # --- INDIVIDUAL ANALYSIS LOGGING ---
+            report, _, _ = st.session_state.analysis_results
+            print("\n" + "-"*40)
+            print(f" INDIVIDUAL RUN LOG - {time.strftime('%H:%M:%S')}")
+            print(f" Predicted: {report['lesion_findings']['severity_label']} | Confidence: {report['lesion_findings']['severity_confidence']:.4f}")
+            print(f" Reviewed:  {report['diagnosis']['severity_grade']} | Confidence: {report['diagnosis']['confidence_score']:.4f}")
+            print("-"*40 + "\n")
 
+    # Rendering section: Display results if they exist in session state
     if st.session_state.analysis_results:
         report, gradcam_map, lesion_gradcam_maps = st.session_state.analysis_results
 
-        # --- Image Comparison Section ---
-        st.markdown("---")
-        st.subheader("🖼️ Image Analysis & Localization")
-        
-        view_options = ["Overall severity"] + (
-            [name.replace("_", " ").title() for name in (lesion_gradcam_maps or {})]
-        )
-        selected_view = st.selectbox("Select localization layer:", view_options)
-
-        if selected_view == "Overall severity":
-            cam_to_show = gradcam_map
-        else:
-            key = selected_view.lower().replace(" ", "_")
-            cam_to_show = (lesion_gradcam_maps or {}).get(key)
-
-        if cam_to_show is not None:
-            overlay = overlay_gradcam(image, cam_to_show)
-            display_mode = st.radio("Display mode:", ["Before-After Slider", "Side-by-Side"], horizontal=True)
-            
-            if display_mode == "Before-After Slider" and HAS_IMAGE_COMPARISON:
-                image_comparison(
-                    img1=image,
-                    img2=overlay,
-                    label1="Original Image",
-                    label2=f"Grad-CAM Overlay ({selected_view})",
-                    starting_position=50,
-                    show_labels=True,
-                    make_responsive=True,
-                    in_memory=True
-                )
-            else:
-                if display_mode == "Before-After Slider" and not HAS_IMAGE_COMPARISON:
-                    st.info("💡 `streamlit-image-comparison` not installed. Falling back to Side-by-Side view.")
-                
-                col_img1, col_img2 = st.columns(2)
-                with col_img1:
-                    st.image(image, caption="Original Fundus Image", width=500)
-                with col_img2:
-                    st.image(overlay, caption=f"Grad-CAM Overlay ({selected_view})", width=500)
-        else:
-            st.image(image, caption="Original Fundus Image", width=500)
-            st.warning("Grad-CAM map could not be generated for this view.")
-
-        # --- Metrics and Results ---
-        st.markdown("---")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Model Prediction", report["lesion_findings"]["severity_label"])
-        with col2:
-            st.metric("Agent Review", report["diagnosis"]["severity_grade"])
-        with col3:
-            st.metric("Confidence Score", f"{report['diagnosis']['confidence_score']:.0%}")
-
-        # Detailed Analysis
-        tab1, tab2, tab3 = st.tabs(["📊 Lesion Analysis", "🧠 Diagnostic Reasoning", "📚 Clinical Evidence"])
-
-        with tab1:
-            st.subheader("Lesion Burden Analysis")
-            st.bar_chart(report["lesion_findings"]["lesion_burden"])
-            findings = report["lesion_findings"].get("findings_summary", "No specific summary available.")
-            st.info(f"**Findings Summary:** {findings}")
-
-        with tab2:
-            st.subheader("Clinical Justification")
-            st.write(report["diagnosis"]["clinical_justification"])
-            st.caption(
-                f"✅ Evidence verification: "
-                f"{report['diagnosis']['evidence_verification']['claims_supported_by_evidence']}/"
-                f"{report['diagnosis']['evidence_verification']['claims_checked']} claims grounded."
+        with c2:
+            st.subheader("Grad-CAM Analysis")
+            view_options = ["Overall severity"] + (
+                [name.replace("_", " ").title() for name in (lesion_gradcam_maps or {})]
             )
-            
-            st.markdown("### 🏥 Referral Recommendation")
-            r = report["referral"]
-            st.markdown(f"""
-            <div class="referral-box">
-                <strong>Referral Required:</strong> {r['referral_required']}<br>
-                <strong>Urgency:</strong> {r['urgency']}<br>
-                <strong>Pathway:</strong> {r['referral_pathway']}<br>
-                <strong>Rationale:</strong> {r['rationale']}
-            </div>
-            """, unsafe_allow_html=True)
+            selected_view = st.selectbox("Localize by", view_options)
 
-        with tab3:
-            st.subheader("Retrieved Clinical Evidence")
-            for i, ev in enumerate(report["retrieved_evidence"]):
-                badge = ev.get("source_type", "local").upper()
-                meta_bits = [b for b in [ev.get("journal"), str(ev.get("year") or "")] if b]
-                meta_str = f" · {' · '.join(meta_bits)}" if meta_bits else ""
-                header = f"[{i+1}] {badge}{meta_str} (relevance: {ev.get('relevance_score', 0):.2f})"
-                with st.expander(header):
-                    st.write(f"“{ev['text']}”")
-                    if ev.get("source_type", "local") != "local":
-                        st.markdown(f"[{ev.get('title', 'View source')}]({ev['source_url']})")
-                    else:
-                        st.caption(f"Source: {ev.get('title', ev.get('source_url'))}")
-
-        # Explanation Section
-        with st.expander("💡 Patient-Friendly Explanation"):
-            exp = report.get("explanation", {})
-            st.write(exp.get("plain_language_summary", "No summary available."))
-            
-            st.markdown("#### Key Contributing Factors")
-            factors = exp.get("key_contributing_factors", [])
-            if factors:
-                for factor in factors:
-                    st.markdown(f"- **{factor.get('factor', 'Unknown')}**: {factor.get('contribution', 'N/A')}")
+            if selected_view == "Overall severity":
+                cam_to_show = gradcam_map
             else:
-                st.write("No specific factors identified.")
-            
+                key = selected_view.lower().replace(" ", "_")
+                cam_to_show = (lesion_gradcam_maps or {}).get(key)
+
+            if cam_to_show is not None:
+                overlay = overlay_gradcam(image, cam_to_show)
+                
+                # Integration of Comparison Slider
+                if HAS_IMAGE_COMPARISON:
+                    image_comparison(
+                        img1=image,
+                        img2=overlay,
+                        label1="Original",
+                        label2=f"Overlay ({selected_view})",
+                        width=600,
+                        starting_position=50,
+                        show_labels=True,
+                        make_responsive=True,
+                        in_memory=True
+                    )
+                else:
+                    st.image(overlay, caption=f"Grad-CAM++ attention overlay ({selected_view})", width=600)
+            else:
+                st.warning("Grad-CAM map could not be generated.")
+
+        # Metrics and Results
+        st.markdown("---")
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Model-predicted severity", report["lesion_findings"]["severity_label"])
+        col2.metric("Agent-reviewed severity", report["diagnosis"]["severity_grade"])
+        col3.metric("Diagnostic confidence", f"{report['diagnosis']['confidence_score']:.0%}")
+
+        st.subheader("📋 Lesion Analysis")
+        st.bar_chart(report["lesion_findings"]["lesion_burden"])
+
+        st.subheader("🧠 Diagnostic Reasoning")
+        st.write(report["diagnosis"]["clinical_justification"])
+        st.caption(
+            f"Evidence verification: "
+            f"{report['diagnosis']['evidence_verification']['claims_supported_by_evidence']}/"
+            f"{report['diagnosis']['evidence_verification']['claims_checked']} claims grounded."
+        )
+
+        st.subheader("📚 Retrieved Clinical Evidence")
+        for i, ev in enumerate(report["retrieved_evidence"]):
+            badge = ev.get("source_type", "local").upper()
+            meta_bits = [b for b in [ev.get("journal"), str(ev.get("year") or "")] if b]
+            meta_str = f" · {' · '.join(meta_bits)}" if meta_bits else ""
+            header = f"[{i+1}] {badge}{meta_str} (relevance: {ev.get('relevance_score', 0):.2f})"
+            with st.expander(header):
+                st.write(f"“{ev['text']}”")
+                if ev.get("source_type", "local") != "local":
+                    st.markdown(f"[{ev.get('title', 'View source')}]({ev['source_url']})")
+                else:
+                    st.caption(f"Source: {ev.get('title', ev.get('source_url'))}")
+
+        st.subheader("🏥 Referral Recommendation")
+        r = report["referral"]
+        st.info(
+            f"**Referral required:** {r['referral_required']}  \n"
+            f"**Urgency:** {r['urgency']}  \n"
+            f"**Pathway:** {r['referral_pathway']}  \n"
+            f"**Rationale:** {r['rationale']}"
+        )
+
+        st.subheader("💡 Explanation")
+        exp = report["explanation"]
+        st.write(exp["plain_language_summary"])
+        for factor in exp["key_contributing_factors"]:
+            st.markdown(f"- **{factor['factor']}**: {factor['contribution']}")
+        
+        # Fixed the potential KeyError here as well while keeping the rest original
+        if "next_steps" in exp:
             st.markdown("#### Suggested Next Steps")
-            steps = exp.get("next_steps", [])
-            if steps:
-                for step in steps:
-                    st.markdown(f"- {step}")
-            else:
-                st.write("Consult with your healthcare provider for next steps.")
-
-    else:
-        st.info("Please upload a fundus image and click 'Run AM-RAG Analysis' to begin.")
-        st.image(image, caption="Uploaded fundus image", width=600)
-
-else:
-    st.info("👋 Welcome! Please upload a retinal fundus image in the sidebar or main area to start the AI-assisted screening process.")
-    col_a, col_b, col_c = st.columns([1, 2, 1])
-    with col_b:
-        st.markdown("### Retinal Fundus Screening Tool")
+            for step in exp["next_steps"]:
+                st.markdown(f"- {step}")
