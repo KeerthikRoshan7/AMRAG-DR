@@ -23,13 +23,11 @@ except ImportError:
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Mock imports for environment where actual modules might not be present
-# In a real scenario, these would be the actual imports
 try:
     from agents.orchestrator import AMRAGOrchestrator
     from utils.gradcam import overlay_gradcam
     from models.lesion_detector import SEVERITY_LABELS
 except ImportError:
-    # Fallback for demonstration/development if the full repo isn't cloned
     class AMRAGOrchestrator:
         def __init__(self, **kwargs): pass
         def run(self, image, **kwargs): return {}, None, {}
@@ -65,9 +63,6 @@ st.markdown("""
         border-radius: 5px;
         height: 3em;
         font-weight: bold;
-    }
-    .reportview-container .main .block-container {
-        padding-top: 2rem;
     }
     h1, h2, h3 {
         color: #1e3a8a;
@@ -122,7 +117,6 @@ with st.sidebar:
     st.write("Run a background evaluation using the APTOS 2019 dataset.")
     
     if st.button("🚀 Run APTOS 2019 Benchmark"):
-        # Pull from Streamlit Secrets
         k_user = st.secrets.get("KAGGLE_USERNAME")
         k_key = st.secrets.get("KAGGLE_KEY")
         
@@ -137,14 +131,12 @@ with st.sidebar:
                     api.authenticate()
                     
                     with tempfile.TemporaryDirectory() as tmpdir:
-                        # Download APTOS 2019
                         api.dataset_download_files(DEFAULT_KAGLLE_DATASET, path=tmpdir, unzip=True)
-                        
                         csv_path = os.path.join(tmpdir, DEFAULT_CSV)
                         img_root = os.path.join(tmpdir, DEFAULT_IMG_DIR)
                         
                         if os.path.exists(csv_path):
-                            df = pd.read_csv(csv_path).head(24) # Reduced sample size
+                            df = pd.read_csv(csv_path).head(24)
                             orchestrator = get_orchestrator()
                             results = []
                             
@@ -168,20 +160,10 @@ with st.sidebar:
                             if results:
                                 res_df = pd.DataFrame(results)
                                 targets = res_df["target"].values
-                                vision_preds = res_df["vision_pred"].values
-                                vision_probs = np.array(res_df["vision_probs"].tolist())
                                 reasoning_preds = res_df["reasoning_pred"].values
-
-                                vis_acc = accuracy_score(targets, vision_preds)
-                                try:
-                                    vis_auroc = roc_auc_score(targets, vision_probs, multi_class='ovr', average='macro')
-                                except:
-                                    vis_auroc = 0.0
-                                
                                 valid_reasoning = reasoning_preds != -1
                                 reas_acc = accuracy_score(targets[valid_reasoning], reasoning_preds[valid_reasoning]) if valid_reasoning.any() else 0.0
-
-                                st.success(f"Benchmark complete! Vision Acc: {vis_acc:.2f}, Reasoning Acc: {reas_acc:.2f}")
+                                st.success(f"Benchmark complete! Reasoning Acc: {reas_acc:.2f}")
                             else:
                                 st.error("No valid images found.")
                         else:
@@ -194,14 +176,12 @@ with st.sidebar:
 # --- Main App ---
 uploaded_file = st.file_uploader("📤 Upload a fundus image", type=["png", "jpg", "jpeg"])
 
-# Use session state to persist results across reruns
 if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = None
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
     
-    # Analysis button
     if st.button("🔍 Run AM-RAG Analysis", type="primary"):
         metadata = {k: v for k, v in {
             "age": age if age > 0 else None,
@@ -214,7 +194,6 @@ if uploaded_file:
         with st.spinner("🧠 Agentic reasoning in progress..."):
             st.session_state.analysis_results = orchestrator.run(image, patient_metadata=metadata or None)
 
-    # Rendering section: Display results if they exist in session state
     if st.session_state.analysis_results:
         report, gradcam_map, lesion_gradcam_maps = st.session_state.analysis_results
 
@@ -222,7 +201,6 @@ if uploaded_file:
         st.markdown("---")
         st.subheader("🖼️ Image Analysis & Localization")
         
-        # Select Grad-CAM view
         view_options = ["Overall severity"] + (
             [name.replace("_", " ").title() for name in (lesion_gradcam_maps or {})]
         )
@@ -236,8 +214,6 @@ if uploaded_file:
 
         if cam_to_show is not None:
             overlay = overlay_gradcam(image, cam_to_show)
-            
-            # Layout Choice: Side-by-side or Slider
             display_mode = st.radio("Display mode:", ["Before-After Slider", "Side-by-Side"], horizontal=True)
             
             if display_mode == "Before-After Slider" and HAS_IMAGE_COMPARISON:
@@ -257,11 +233,11 @@ if uploaded_file:
                 
                 col_img1, col_img2 = st.columns(2)
                 with col_img1:
-                    st.image(image, caption="Original Fundus Image", use_container_width=True)
+                    st.image(image, caption="Original Fundus Image", width=500)
                 with col_img2:
-                    st.image(overlay, caption=f"Grad-CAM Overlay ({selected_view})", use_container_width=True)
+                    st.image(overlay, caption=f"Grad-CAM Overlay ({selected_view})", width=500)
         else:
-            st.image(image, caption="Original Fundus Image", use_container_width=True)
+            st.image(image, caption="Original Fundus Image", width=500)
             st.warning("Grad-CAM map could not be generated for this view.")
 
         # --- Metrics and Results ---
@@ -280,8 +256,6 @@ if uploaded_file:
         with tab1:
             st.subheader("Lesion Burden Analysis")
             st.bar_chart(report["lesion_findings"]["lesion_burden"])
-            
-            # Summary of findings
             findings = report["lesion_findings"].get("findings_summary", "No specific summary available.")
             st.info(f"**Findings Summary:** {findings}")
 
@@ -294,7 +268,6 @@ if uploaded_file:
                 f"{report['diagnosis']['evidence_verification']['claims_checked']} claims grounded."
             )
             
-            # Referral Recommendation in a stylized box
             st.markdown("### 🏥 Referral Recommendation")
             r = report["referral"]
             st.markdown(f"""
@@ -322,26 +295,31 @@ if uploaded_file:
 
         # Explanation Section
         with st.expander("💡 Patient-Friendly Explanation"):
-            exp = report["explanation"]
-            st.write(exp["plain_language_summary"])
+            exp = report.get("explanation", {})
+            st.write(exp.get("plain_language_summary", "No summary available."))
+            
             st.markdown("#### Key Contributing Factors")
-            for factor in exp["key_contributing_factors"]:
-                st.markdown(f"- **{factor['factor']}**: {factor['contribution']}")
+            factors = exp.get("key_contributing_factors", [])
+            if factors:
+                for factor in factors:
+                    st.markdown(f"- **{factor.get('factor', 'Unknown')}**: {factor.get('contribution', 'N/A')}")
+            else:
+                st.write("No specific factors identified.")
             
             st.markdown("#### Suggested Next Steps")
-            for step in exp["next_steps"]:
-                st.markdown(f"- {step}")
+            steps = exp.get("next_steps", [])
+            if steps:
+                for step in steps:
+                    st.markdown(f"- {step}")
+            else:
+                st.write("Consult with your healthcare provider for next steps.")
 
     else:
-        # Initial state before analysis
         st.info("Please upload a fundus image and click 'Run AM-RAG Analysis' to begin.")
-        st.image(image, caption="Uploaded fundus image", use_container_width=True)
+        st.image(image, caption="Uploaded fundus image", width=600)
 
 else:
-    # Welcome screen / Instructions
     st.info("👋 Welcome! Please upload a retinal fundus image in the sidebar or main area to start the AI-assisted screening process.")
-    
-    # Placeholder for UI balance
     col_a, col_b, col_c = st.columns([1, 2, 1])
     with col_b:
-        st.image("https://raw.githubusercontent.com/KeerthikRoshan7/DR-MARVEL/main/assets/logo.png", use_container_width=True) # Assuming a logo exists or just skip
+        st.markdown("### Retinal Fundus Screening Tool")
